@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>REALorFAKE – Fast Risk Check</title>
+<style>
+:root { --bg:#000; --card:#111; --text:#fff; --accent:#ff0080; --muted:#888; --line:#222; }
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{width:100%;max-width:520px;background:var(--card);padding:34px 26px;border-radius:24px;box-shadow:0 10px 40px rgba(255,0,128,.10);border:1px solid var(--line);text-align:center}
+h1{margin:0 0 6px;font-size:32px;letter-spacing:-1px;background:linear-gradient(to right,#fff,#888);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.subtitle{color:var(--muted);margin-bottom:18px;font-size:14px;line-height:1.4}
+.badge{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:10px 0 18px}
+.pill{background:#0b0b0b;border:1px solid #262626;color:#bdbdbd;font-size:12px;padding:7px 10px;border-radius:999px}
+input{width:100%;padding:16px;margin-bottom:12px;background:#1a1a1a;border:1px solid #333;border-radius:12px;color:#fff;font-size:15px;outline:none;box-sizing:border-box;transition:.2s}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(255,0,128,.2)}
+button.action-btn{width:100%;padding:16px;background:#fff;color:#000;border:none;border-radius:12px;font-size:15px;font-weight:900;cursor:pointer;transition:.2s;text-transform:uppercase;letter-spacing:1px}
+button.action-btn:hover{transform:scale(1.01);background:#f0f0f0}
+button.action-btn:disabled{opacity:.55;cursor:wait;transform:none}
+#result{margin-top:18px;min-height:20px}
+.res-box{padding:18px;border-radius:16px;animation:popIn .25s;text-align:left}
+.res-high{background:rgba(255,23,68,.15);border:2px solid #ff1744;color:#ff7d8f}
+.res-med{background:rgba(255,183,77,.10);border:2px solid #ffb74d;color:#ffd4a2}
+.res-low{background:rgba(0,255,0,.10);border:2px solid #00ff00;color:#69f0ae}
+.res-percent{font-size:42px;font-weight:950;display:block;margin:6px 0 2px;color:#fff}
+.pay-big{background:linear-gradient(135deg,#ff0080,#ff4081);color:#fff;padding:18px 16px;border-radius:18px;text-decoration:none;display:block;margin:22px auto 8px;font-weight:900;font-size:18px;box-shadow:0 10px 30px rgba(255,0,128,.3);transition:transform .2s;cursor:pointer;border:1px solid rgba(255,255,255,.1)}
+.pay-big:hover{transform:scale(1.01);box-shadow:0 15px 40px rgba(255,0,128,.45)}
+.pay-sub{font-size:12px;opacity:.85;font-weight:normal;margin-top:6px;display:block}
+.small{font-size:12px;color:#9aa0aa;line-height:1.4;margin-top:10px}
+hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
+.row{display:flex;gap:10px}
+.row > *{flex:1}
+.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);backdrop-filter:blur(5px);z-index:999;display:flex;justify-content:center;align-items:center;opacity:0;visibility:hidden;transition:.25s}
+.modal-overlay.active{opacity:1;visibility:visible}
+.modal-box{background:#141414;padding:22px;border-radius:22px;width:92%;max-width:420px;position:relative;border:1px solid #333;text-align:left;transform:translateY(16px);transition:.25s}
+.modal-overlay.active .modal-box{transform:translateY(0)}
+.close-btn{position:absolute;top:12px;right:16px;font-size:28px;cursor:pointer;color:#666}
+.close-btn:hover{color:#fff}
+.crypto-box{background:#000;padding:12px;border:1px dashed #444;border-radius:12px;margin-top:10px;font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#bbb;word-break:break-all;text-align:center;cursor:pointer;transition:.2s}
+.crypto-box:hover{border-color:#ff0080;color:#fff;background:#0a0a0a}
+.warn{margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,93,93,.35);background:rgba(255,93,93,.08);color:#ffd2d2;font-size:12px;line-height:1.35}
+.toast{margin-top:10px;color:#bfe3c6;font-size:12px}
+@keyframes popIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>REALorFAKE</h1>
+  <div class="subtitle">Fast AI / Deepfake Risk Check for Instagram, TikTok & X</div>
+
+  <div class="badge">
+    <div class="pill" id="authState">Not signed in</div>
+    <div class="pill" id="quotaState">Free left today: —</div>
+  </div>
+
+  <div id="loginBox">
+    <div class="row">
+      <input id="email" placeholder="Email for login code" />
+      <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendCode()">SEND</button>
+    </div>
+    <div class="row">
+      <input id="code" placeholder="6-digit code" />
+      <button class="action-btn" style="padding:14px;font-size:13px" onclick="verifyCode()">VERIFY</button>
+    </div>
+    <div class="small">Email code login (no passwords). Free: 10 checks/day. PRO: unlimited.</div>
+    <hr>
+  </div>
+
+  <input type="text" id="url" placeholder="Paste video link here..." />
+  <button onclick="check()" id="btn" class="action-btn">CHECK LINK</button>
+
+  <div id="result"></div>
+
+  <a class="pay-big" onclick="openModal()">
+    🚀 GET PRO (LIFETIME)
+    <span class="pay-sub">Unlimited Checks • Faster Access • API (coming soon)</span>
+  </a>
+
+  <div class="small">
+    This is a fast risk estimate based on link/source signals. Not 100% proof.
+  </div>
+</div>
+
+<div id="paymentModal" class="modal-overlay">
+  <div class="modal-box">
+    <span class="close-btn" onclick="closeModal()">&times;</span>
+
+    <h2 style="margin:0 0 6px 0;color:#fff">Lifetime PRO</h2>
+    <div style="color:#9aa0aa;font-size:13px;line-height:1.5">
+      Unlimited checks forever. Activate automatically by submitting your TXID.
+    </div>
+
+    <div class="warn"><b>TRC20 only.</b> Do not send ERC20/BEP20.</div>
+
+    <div style="margin-top:12px;color:#fff;font-weight:900">USDT (TRC20) • $9.00</div>
+    <div class="crypto-box" onclick="copyAddress()" id="addrBox">TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB</div>
+    <div class="small">(Tap address to copy)</div>
+
+    <div style="display:flex;justify-content:center;margin-top:10px;">
+      <div style="background:#fff;padding:10px;border-radius:14px;">
+        <img id="qrImg" width="190" height="190" alt="TRC20 QR">
+      </div>
+    </div>
+
+    <div style="margin-top:12px;color:#9aa0aa;font-size:12px;line-height:1.5">
+      1) Send <b>$9 USDT</b> to the address above<br>
+      2) Paste your <b>TXID</b> below<br>
+      3) Tap <b>Activate PRO</b>
+    </div>
+
+    <input id="txid" placeholder="Paste TXID here..." style="margin-top:12px" />
+    <button class="action-btn" style="margin-top:10px;font-size:13px;padding:12px" onclick="activatePro()">
+      ACTIVATE PRO
+    </button>
+
+    <div id="payStatus" class="toast"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script>
+  // REPLACE THESE 2 VALUES:
+  const SUPABASE_URL = "https://ktwmwehxqaztyodabqqj.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_I0bbQ83Qw6pVidgdlO-GcQ_64BEQGtM";
+
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const addr = "TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB";
+  const modal = document.getElementById("paymentModal");
+
+  async function refreshMe() {
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) {
+      document.getElementById("authState").textContent = "Not signed in";
+      document.getElementById("quotaState").textContent = "Free left today: —";
+      return;
+    }
+    document.getElementById("authState").textContent = "Signed in: " + session.user.email;
+
+    const me = await fetch("/api/me", {
+      headers: { "Authorization": "Bearer " + session.access_token }
+    }).then(r => r.json());
+
+    if (me.ok) {
+      if (me.is_pro) document.getElementById("quotaState").textContent = "PRO Active: Unlimited";
+      else document.getElementById("quotaState").textContent = "Free left today: " + me.free_left_today + " / " + me.daily_free_limit;
+    }
+  }
+
+  async function sendCode() {
+    const email = document.getElementById("email").value.trim();
+    if (!email) return;
+    await sb.auth.signInWithOtp({ email });
+    alert("Code sent to email. Check inbox/spam.");
+  }
+
+  async function verifyCode() {
+    const email = document.getElementById("email").value.trim();
+    const token = document.getElementById("code").value.trim();
+    if (!email || !token) return;
+    const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
+    if (error) alert(error.message);
+    await refreshMe();
+  }
+
+  async function check() {
+    const input = document.getElementById("url");
+    const btn = document.getElementById("btn");
+    const resDiv = document.getElementById("result");
+    const url = input.value.trim();
+    if (!url) return;
+
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) {
+      alert("Please sign in to use free checks (10/day) or PRO.");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "CHECKING...";
+    resDiv.innerHTML = "";
+
+    const quota = await fetch("/api/consume-scan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + session.access_token
+      },
+      body: JSON.stringify({})
+    }).then(r => r.json());
+
+    if (!quota.ok || quota.allowed === false) {
+      btn.disabled = false;
+      btn.textContent = "CHECK LINK";
+      resDiv.innerHTML = `<div class="res-box res-high">
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
+        <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited checks.</div>
+      </div>`;
+      openModal();
+      await refreshMe();
+      return;
+    }
+
+    try {
+      const response = await fetch("/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      const data = await response.json();
+
+      const reasons = (data.reasons || []).map(r => `<div style="font-size:12px;opacity:.95;margin-top:6px;color:#fff">• ${r}</div>`).join("");
+
+      if (data.verdict === "high_risk") {
+        resDiv.innerHTML = `<div class="res-box res-high">
+          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">FAST CHECK</div>
+          <span class="res-percent">${data.percent}%</span>
+          <div style="font-size:14px;color:#fff">High risk of AI manipulation.</div>
+          <div style="margin-top:10px">${reasons}</div>
+        </div>`;
+      } else if (data.verdict === "medium_risk") {
+        resDiv.innerHTML = `<div class="res-box res-med">
+          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">FAST CHECK</div>
+          <span class="res-percent">${data.percent}%</span>
+          <div style="font-size:14px;color:#fff">Medium risk. Verify before reposting.</div>
+          <div style="margin-top:10px">${reasons}</div>
+        </div>`;
+      } else {
+        resDiv.innerHTML = `<div class="res-box res-low">
+          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">FAST CHECK</div>
+          <span class="res-percent">${data.percent}%</span>
+          <div style="font-size:14px;color:#fff">Low risk based on link signals.</div>
+          <div style="margin-top:10px">${reasons}</div>
+        </div>`;
+      }
+
+      await refreshMe();
+    } catch (e) {
+      resDiv.innerHTML = `<div style="color:red">Server Error. Please try again.</div>`;
+    }
+
+    btn.disabled = false;
+    btn.textContent = "CHECK LINK";
+  }
+
+  function openModal() {
+    modal.classList.add("active");
+    QRCode.toDataURL(addr, { margin: 1, width: 190 }, (err, url) => {
+      if (!err) document.getElementById("qrImg").src = url;
+    });
+  }
+  function closeModal() { modal.classList.remove("active"); }
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+
+  function copyAddress() {
+    navigator.clipboard.writeText(addr).then(() => {
+      document.getElementById("payStatus").textContent = "Address copied.";
+      setTimeout(() => document.getElementById("payStatus").textContent = "", 1200);
+    }).catch(() => prompt("Copy address:", addr));
+  }
+
+  async function activatePro() {
+    const txid = document.getElementById("txid").value.trim();
+    if (!txid) return;
+
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) {
+      alert("Please sign in first.");
+      return;
+    }
+
+    document.getElementById("payStatus").textContent = "Verifying TXID...";
+
+    const r = await fetch("/api/payments/submit-txid", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + session.access_token
+      },
+      body: JSON.stringify({ txid })
+    });
+
+    const j = await r.json();
+    if (!j.ok) {
+      document.getElementById("payStatus").textContent = "Payment not verified: " + j.error;
+      return;
+    }
+
+    document.getElementById("payStatus").textContent = "PRO activated. Unlimited checks enabled.";
+    await refreshMe();
+  }
+
+  refreshMe();
+</script>
+</body>
+</html>
