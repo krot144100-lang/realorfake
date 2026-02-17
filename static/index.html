@@ -295,10 +295,27 @@ a.link{color:#ff7ab8;text-decoration:none}
   }
 
   // Ensure session is loaded when returning from magic link
-  (async () => {
+(async () => {
+  // Handle both Supabase magic link flows:
+  // 1) code in query (?code=...)
+  // 2) tokens in hash (#access_token=...)
+  try {
+    const url = new URL(window.location.href);
+
+    // Case 1: code flow
+    if (url.searchParams.get("code")) {
+      await sb.auth.exchangeCodeForSession(window.location.href);
+      window.history.replaceState({}, document.title, window.location.origin);
+    }
+
+    // Case 2: hash tokens flow (supabase-js usually reads it, but we ensure session is loaded)
     await sb.auth.getSession();
-    await refreshMe();
-  })();
+  } catch (e) {
+    // ignore
+  }
+
+  await refreshMe();
+})();
 </script>
 </body>
 </html>
