@@ -5,26 +5,27 @@ from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
+# ===== ENV =====
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
 SUPABASE_SECRET_KEY = (os.getenv("SUPABASE_SECRET_KEY") or "").strip()  # sb_secret_...
+
 DAILY_FREE_LIMIT = int(os.getenv("DAILY_FREE_LIMIT", "10"))
 
-PAY_TO_ADDRESS = os.getenv("PAY_TO_ADDRESS", "").strip()
+PAY_TO_ADDRESS = (os.getenv("PAY_TO_ADDRESS") or "").strip()
 PRICE_USDT = float(os.getenv("PRICE_USDT", "9.00"))
-TRONSCAN_API_BASE = os.getenv("TRONSCAN_API_BASE", "https://apilist.tronscan.org/api").strip()
-TRC20_USDT_CONTRACT = os.getenv("TRC20_USDT_CONTRACT", "").strip()
+
+TRONSCAN_API_BASE = (os.getenv("TRONSCAN_API_BASE") or "https://apilist.tronscan.org/api").strip()
+TRC20_USDT_CONTRACT = (os.getenv("TRC20_USDT_CONTRACT") or "").strip()
 
 if not SUPABASE_URL:
-    raise RuntimeError("Missing env SUPABASE_URL")
+    raise RuntimeError("Missing env SUPABASE_URL (Supabase Project URL)")
 if not SUPABASE_SECRET_KEY:
-    raise RuntimeError("Missing env SUPABASE_SECRET_KEY (sb_secret_...)")
+    raise RuntimeError("Missing env SUPABASE_SECRET_KEY (sb_secret_... from Supabase API Keys)")
 
 REST_BASE = f"{SUPABASE_URL}/rest/v1"
 AUTH_USER_ENDPOINT = f"{SUPABASE_URL}/auth/v1/user"
 
-# ---------------------------
-# Helpers: time
-# ---------------------------
+# ===== TIME HELPERS =====
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
@@ -32,9 +33,7 @@ def start_of_today_utc():
     now = utc_now()
     return datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
 
-# ---------------------------
-# Helpers: auth
-# ---------------------------
+# ===== AUTH HELPERS =====
 def get_bearer_token():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -42,7 +41,9 @@ def get_bearer_token():
     return auth.replace("Bearer ", "").strip() or None
 
 def get_user_from_access_token(access_token: str):
-    # Verify user token with Supabase Auth REST
+    """
+    Verifies user's Supabase access_token and returns {id, email} or None.
+    """
     headers = {
         "apikey": SUPABASE_SECRET_KEY,
         "Authorization": f"Bearer {access_token}",
@@ -51,12 +52,12 @@ def get_user_from_access_token(access_token: str):
     if r.status_code != 200:
         return None
     j = r.json()
-    # expected: { id, email, ... }
-    return {"id": j.get("id"), "email": j.get("email")}
+    uid = j.get("id")
+    if not uid:
+        return None
+    return {"id": uid, "email": j.get("email")}
 
-# ---------------------------
-# Helpers: PostgREST profiles table (server-side with secret key)
-# ---------------------------
+# ===== SUPABASE REST (server-side, privileged) =====
 def sb_headers_server():
     return {
         "apikey": SUPABASE_SECRET_KEY,
@@ -114,9 +115,7 @@ def reset_daily_if_needed(profile):
         return profile_update(profile["id"], {"free_used_today": 0, "free_reset_at": today.isoformat()})
     return profile
 
-# ---------------------------
-# TronScan payment verification
-# ---------------------------
+# ===== TRONSCAN PAYMENT VERIFY =====
 def tronscan_txinfo(txid):
     url = f"{TRONSCAN_API_BASE}/transaction-info?hash={txid}"
     r = requests.get(url, timeout=15)
@@ -158,12 +157,10 @@ def verify_usdt_trc20_tx(txid, expected_to, usdt_contract, min_amount):
 
     return (True, "ok", {"to": to_addr, "contract": contract, "amount": amount, "decimals": decimals})
 
-# ---------------------------
-# Fast Check (no downloads)
-# ---------------------------
+# ===== FAST CHECK (NO DOWNLOADS, NO RANDOM) =====
 AI_KEYWORDS = [
-    "kling","luma","sora","runway","midjourney","haiper","synthesia","heygen",
-    "deepfake","face swap","faceswap","ai generated","aigenerated"
+    "kling", "luma", "sora", "runway", "midjourney", "haiper", "synthesia", "heygen",
+    "deepfake", "face swap", "faceswap", "ai generated", "aigenerated"
 ]
 HIGH_RISK_HOSTS = {"x.com", "twitter.com"}
 MED_RISK_HOSTS = {"tiktok.com", "www.tiktok.com", "instagram.com", "www.instagram.com"}
@@ -189,6 +186,7 @@ def score_fast_check(url: str):
     if not host:
         return (0, "invalid_url", ["Could not parse URL host"])
 
+    # 1) Source signal
     if host in HIGH_RISK_HOSTS:
         score += 30
         reasons.append("Source signal: X/Twitter has a high repost/bot content rate")
@@ -199,15 +197,18 @@ def score_fast_check(url: str):
         score += 10
         reasons.append("Source signal: unknown platform (harder to verify original source)")
 
+    # 2) Keyword signal
     matched = [k for k in AI_KEYWORDS if k in url_l]
     if matched:
         score += 55
         reasons.append(f"AI keyword detected in link: {matched[0]}")
 
+    # 3) Reupload patterns
     if re.search(r"(download|dl=|save|repost|mirror|cdn|proxy)", url_l):
         score += 12
         reasons.append("Reupload pattern detected in link (download/repost/mirror)")
 
+    # 4) Weak origin handle (heuristic)
     if host in MED_RISK_HOSTS and "@" not in url_l and "/@" not in url_l:
         score += 7
         reasons.append("Weak origin signal: no visible creator handle in the URL")
@@ -216,9 +217,7 @@ def score_fast_check(url: str):
     verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
     return (score, verdict, reasons[:6])
 
-# ---------------------------
-# Routes
-# ---------------------------
+# ===== ROUTES =====
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
@@ -251,7 +250,7 @@ def api_me():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     user = get_user_from_access_token(token)
-    if not user or not user.get("id"):
+    if not user:
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     profile = reset_daily_if_needed(ensure_profile(user))
@@ -272,7 +271,7 @@ def api_consume_scan():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     user = get_user_from_access_token(token)
-    if not user or not user.get("id"):
+    if not user:
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     profile = reset_daily_if_needed(ensure_profile(user))
@@ -295,7 +294,7 @@ def api_submit_txid():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     user = get_user_from_access_token(token)
-    if not user or not user.get("id"):
+    if not user:
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     body = request.get_json() or {}
