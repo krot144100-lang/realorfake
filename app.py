@@ -2,29 +2,28 @@ import os, re, datetime
 import requests
 from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_from_directory
-from supabase import create_client, Client
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-
-if not SUPABASE_URL:
-    raise RuntimeError("Missing env SUPABASE_URL (set it in Render → Environment)")
-if not SUPABASE_SERVICE_ROLE_KEY:
-    raise RuntimeError("Missing env SUPABASE_SERVICE_ROLE_KEY (set it in Render → Environment)")
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_SECRET_KEY = (os.getenv("SUPABASE_SECRET_KEY") or "").strip()  # sb_secret_...
 DAILY_FREE_LIMIT = int(os.getenv("DAILY_FREE_LIMIT", "10"))
 
 PAY_TO_ADDRESS = os.getenv("PAY_TO_ADDRESS", "").strip()
 PRICE_USDT = float(os.getenv("PRICE_USDT", "9.00"))
-
 TRONSCAN_API_BASE = os.getenv("TRONSCAN_API_BASE", "https://apilist.tronscan.org/api").strip()
 TRC20_USDT_CONTRACT = os.getenv("TRC20_USDT_CONTRACT", "").strip()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+if not SUPABASE_URL:
+    raise RuntimeError("Missing env SUPABASE_URL")
+if not SUPABASE_SECRET_KEY:
+    raise RuntimeError("Missing env SUPABASE_SECRET_KEY (sb_secret_...)")
+
+REST_BASE = f"{SUPABASE_URL}/rest/v1"
+AUTH_USER_ENDPOINT = f"{SUPABASE_URL}/auth/v1/user"
 
 # ---------------------------
-# Helpers: auth + profiles
+# Helpers: time
 # ---------------------------
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
@@ -33,32 +32,77 @@ def start_of_today_utc():
     now = utc_now()
     return datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
 
-def get_user_from_bearer():
+# ---------------------------
+# Helpers: auth
+# ---------------------------
+def get_bearer_token():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
-    token = auth.replace("Bearer ", "").strip()
-    if not token:
-        return None
-    try:
-        user_resp = supabase.auth.get_user(token)
-        return user_resp.user
-    except Exception:
-        return None
+    return auth.replace("Bearer ", "").strip() or None
 
-def ensure_profile(user):
-    prof = supabase.table("profiles").select("*").eq("id", user.id).execute()
-    if prof.data and len(prof.data) > 0:
-        return prof.data[0]
-    row = {
-        "id": user.id,
-        "email": user.email,
+def get_user_from_access_token(access_token: str):
+    # Verify user token with Supabase Auth REST
+    headers = {
+        "apikey": SUPABASE_SECRET_KEY,
+        "Authorization": f"Bearer {access_token}",
+    }
+    r = requests.get(AUTH_USER_ENDPOINT, headers=headers, timeout=15)
+    if r.status_code != 200:
+        return None
+    j = r.json()
+    # expected: { id, email, ... }
+    return {"id": j.get("id"), "email": j.get("email")}
+
+# ---------------------------
+# Helpers: PostgREST profiles table (server-side with secret key)
+# ---------------------------
+def sb_headers_server():
+    return {
+        "apikey": SUPABASE_SECRET_KEY,
+        "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
+        "Content-Type": "application/json",
+    }
+
+def profile_get(user_id: str):
+    url = f"{REST_BASE}/profiles?id=eq.{user_id}&select=*"
+    r = requests.get(url, headers=sb_headers_server(), timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"profiles_get_failed: {r.status_code} {r.text}")
+    data = r.json()
+    return data[0] if data else None
+
+def profile_insert(user_id: str, email: str):
+    url = f"{REST_BASE}/profiles"
+    payload = [{
+        "id": user_id,
+        "email": email,
         "is_pro": False,
         "free_used_today": 0,
         "free_reset_at": start_of_today_utc().isoformat()
-    }
-    ins = supabase.table("profiles").insert(row).execute()
-    return ins.data[0]
+    }]
+    headers = sb_headers_server()
+    headers["Prefer"] = "return=representation"
+    r = requests.post(url, headers=headers, json=payload, timeout=15)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"profiles_insert_failed: {r.status_code} {r.text}")
+    return r.json()[0]
+
+def profile_update(user_id: str, fields: dict):
+    url = f"{REST_BASE}/profiles?id=eq.{user_id}"
+    headers = sb_headers_server()
+    headers["Prefer"] = "return=representation"
+    r = requests.patch(url, headers=headers, json=fields, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"profiles_update_failed: {r.status_code} {r.text}")
+    data = r.json()
+    return data[0] if data else None
+
+def ensure_profile(user):
+    p = profile_get(user["id"])
+    if p:
+        return p
+    return profile_insert(user["id"], user.get("email"))
 
 def reset_daily_if_needed(profile):
     try:
@@ -67,15 +111,11 @@ def reset_daily_if_needed(profile):
         reset_at = start_of_today_utc()
     today = start_of_today_utc()
     if reset_at < today:
-        upd = supabase.table("profiles").update({
-            "free_used_today": 0,
-            "free_reset_at": today.isoformat()
-        }).eq("id", profile["id"]).execute()
-        return upd.data[0]
+        return profile_update(profile["id"], {"free_used_today": 0, "free_reset_at": today.isoformat()})
     return profile
 
 # ---------------------------
-# TronScan payment verification (semi-auto)
+# TronScan payment verification
 # ---------------------------
 def tronscan_txinfo(txid):
     url = f"{TRONSCAN_API_BASE}/transaction-info?hash={txid}"
@@ -118,15 +158,13 @@ def verify_usdt_trc20_tx(txid, expected_to, usdt_contract, min_amount):
 
     return (True, "ok", {"to": to_addr, "contract": contract, "amount": amount, "decimals": decimals})
 
-
 # ---------------------------
-# Fast Check (no downloads, no randomness)
+# Fast Check (no downloads)
 # ---------------------------
 AI_KEYWORDS = [
     "kling","luma","sora","runway","midjourney","haiper","synthesia","heygen",
     "deepfake","face swap","faceswap","ai generated","aigenerated"
 ]
-
 HIGH_RISK_HOSTS = {"x.com", "twitter.com"}
 MED_RISK_HOSTS = {"tiktok.com", "www.tiktok.com", "instagram.com", "www.instagram.com"}
 
@@ -142,8 +180,7 @@ def normalize_host(url):
 
 def score_fast_check(url: str):
     url_l = (url or "").strip().lower()
-    reasons = []
-    score = 0
+    reasons, score = [], 0
 
     if not url_l.startswith("http"):
         return (0, "invalid_url", ["URL must start with http/https"])
@@ -152,7 +189,6 @@ def score_fast_check(url: str):
     if not host:
         return (0, "invalid_url", ["Could not parse URL host"])
 
-    # 1) Source signal
     if host in HIGH_RISK_HOSTS:
         score += 30
         reasons.append("Source signal: X/Twitter has a high repost/bot content rate")
@@ -163,33 +199,22 @@ def score_fast_check(url: str):
         score += 10
         reasons.append("Source signal: unknown platform (harder to verify original source)")
 
-    # 2) Keyword signals
     matched = [k for k in AI_KEYWORDS if k in url_l]
     if matched:
         score += 55
         reasons.append(f"AI keyword detected in link: {matched[0]}")
 
-    # 3) Reupload/aggregator patterns
     if re.search(r"(download|dl=|save|repost|mirror|cdn|proxy)", url_l):
         score += 12
         reasons.append("Reupload pattern detected in link (download/repost/mirror)")
 
-    # 4) Weak origin handle signal (heuristic)
     if host in MED_RISK_HOSTS and "@" not in url_l and "/@" not in url_l:
         score += 7
         reasons.append("Weak origin signal: no visible creator handle in the URL")
 
     score = max(0, min(100, score))
-
-    if score >= 75:
-        verdict = "high_risk"
-    elif score >= 45:
-        verdict = "medium_risk"
-    else:
-        verdict = "low_risk"
-
+    verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
     return (score, verdict, reasons[:6])
-
 
 # ---------------------------
 # Routes
@@ -197,7 +222,6 @@ def score_fast_check(url: str):
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
-
 
 @app.post("/analyze")
 def analyze():
@@ -209,24 +233,25 @@ def analyze():
         if verdict == "invalid_url":
             return jsonify({"error": "invalid_url", "message": reasons[0]}), 400
 
-        # For UI compatibility we keep "result" + "percent"
-        # But correct meaning is "RISK SCORE", not "AI probability".
         return jsonify({
             "result": "fake" if verdict == "high_risk" else "real",
             "percent": int(score),
             "verdict": verdict,
             "reasons": reasons,
             "type": "fast_check",
-            "note": "Fast risk check based on source signals and public link patterns. Not 100% proof."
+            "note": "Fast risk check based on link/source signals. Not 100% proof."
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.get("/api/me")
 def api_me():
-    user = get_user_from_bearer()
-    if not user:
+    token = get_bearer_token()
+    if not token:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    user = get_user_from_access_token(token)
+    if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     profile = reset_daily_if_needed(ensure_profile(user))
@@ -234,21 +259,23 @@ def api_me():
 
     return jsonify({
         "ok": True,
-        "user": {"id": user.id, "email": user.email},
+        "user": {"id": user["id"], "email": user.get("email")},
         "is_pro": profile["is_pro"],
         "free_left_today": left,
         "daily_free_limit": DAILY_FREE_LIMIT
     })
 
-
 @app.post("/api/consume-scan")
 def api_consume_scan():
-    user = get_user_from_bearer()
-    if not user:
+    token = get_bearer_token()
+    if not token:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    user = get_user_from_access_token(token)
+    if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     profile = reset_daily_if_needed(ensure_profile(user))
-
     if profile["is_pro"]:
         return jsonify({"ok": True, "allowed": True, "reason": "pro"})
 
@@ -257,17 +284,18 @@ def api_consume_scan():
         return jsonify({"ok": True, "allowed": False, "reason": "limit_reached", "free_left_today": 0})
 
     used += 1
-    upd = supabase.table("profiles").update({"free_used_today": used}).eq("id", user.id).execute()
-    newp = upd.data[0]
-    left = max(0, DAILY_FREE_LIMIT - int(newp["free_used_today"]))
-
+    profile_update(profile["id"], {"free_used_today": used})
+    left = max(0, DAILY_FREE_LIMIT - used)
     return jsonify({"ok": True, "allowed": True, "reason": "free", "free_left_today": left})
-
 
 @app.post("/api/payments/submit-txid")
 def api_submit_txid():
-    user = get_user_from_bearer()
-    if not user:
+    token = get_bearer_token()
+    if not token:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    user = get_user_from_access_token(token)
+    if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     body = request.get_json() or {}
@@ -284,10 +312,9 @@ def api_submit_txid():
     if not ok:
         return jsonify({"ok": False, "error": code, "meta": meta}), 400
 
-    supabase.table("profiles").update({
+    profile_update(user["id"], {
         "is_pro": True,
         "pro_plan": "lifetime_pro",
         "pro_activated_at": utc_now().isoformat()
-    }).eq("id", user.id).execute()
-
+    })
     return jsonify({"ok": True, "status": "activated", "is_pro": True, "meta": meta})
