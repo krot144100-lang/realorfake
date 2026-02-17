@@ -41,6 +41,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
 .warn{margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,93,93,.35);background:rgba(255,93,93,.08);color:#ffd2d2;font-size:12px;line-height:1.35}
 .toast{margin-top:10px;color:#bfe3c6;font-size:12px}
 @keyframes popIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+a.link{color:#ff7ab8;text-decoration:none}
 </style>
 </head>
 <body>
@@ -53,19 +54,20 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
     <div class="pill" id="quotaState">Free left today: —</div>
   </div>
 
+  <!-- LOGIN (MAGIC LINK) -->
   <div id="loginBox">
     <div class="row">
-      <input id="email" placeholder="Email for login code" />
-      <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendCode()">SEND</button>
+      <input id="email" placeholder="Email to receive a magic link" />
+      <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendMagicLink()">SEND</button>
     </div>
-    <div class="row">
-      <input id="code" placeholder="6-digit code" />
-      <button class="action-btn" style="padding:14px;font-size:13px" onclick="verifyCode()">VERIFY</button>
+    <div class="small">
+      We’ll email you a <b>magic link</b>. Tap “Log In” in your email to sign in.<br>
+      Free: 10 checks/day. PRO: unlimited.
     </div>
-    <div class="small">Email code login (no passwords). Free: 10 checks/day. PRO: unlimited.</div>
     <hr>
   </div>
 
+  <!-- SCAN -->
   <input type="text" id="url" placeholder="Paste video link here..." />
   <button onclick="check()" id="btn" class="action-btn">CHECK LINK</button>
 
@@ -81,6 +83,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
   </div>
 </div>
 
+<!-- PAY MODAL -->
 <div id="paymentModal" class="modal-overlay">
   <div class="modal-box">
     <span class="close-btn" onclick="closeModal()">&times;</span>
@@ -121,10 +124,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script>
   // REPLACE THESE 2 VALUES:
-  const SUPABASE_URL = "https://ktwmwehxqaztyodabqqj.supabase.co";
-  const SUPABASE_ANON_KEY = "sb_publishable_I0bbQ83Qw6pVidgdlO-GcQ_64BEQGtM";
+  const SUPABASE_URL = "PASTE_SUPABASE_URL_HERE";
+  const SUPABASE_ANON_KEY = "PASTE_SUPABASE_ANON_KEY_HERE"; // sb_publishable_...
 
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
   const addr = "TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB";
   const modal = document.getElementById("paymentModal");
 
@@ -147,20 +151,20 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
     }
   }
 
-  async function sendCode() {
+  async function sendMagicLink() {
     const email = document.getElementById("email").value.trim();
     if (!email) return;
-    await sb.auth.signInWithOtp({ email });
-    alert("Code sent to email. Check inbox/spam.");
-  }
 
-  async function verifyCode() {
-    const email = document.getElementById("email").value.trim();
-    const token = document.getElementById("code").value.trim();
-    if (!email || !token) return;
-    const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
-    if (error) alert(error.message);
-    await refreshMe();
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin }
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    alert("Magic link sent. Open your email and tap 'Log In'.");
   }
 
   async function check() {
@@ -290,7 +294,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
     await refreshMe();
   }
 
-  refreshMe();
+  // Ensure session is loaded when returning from magic link
+  (async () => {
+    await sb.auth.getSession();
+    await refreshMe();
+  })();
 </script>
 </body>
 </html>
