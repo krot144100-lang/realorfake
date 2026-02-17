@@ -8,6 +8,11 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+if not SUPABASE_URL:
+    raise RuntimeError("Missing env SUPABASE_URL (set it in Render → Environment)")
+if not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError("Missing env SUPABASE_SERVICE_ROLE_KEY (set it in Render → Environment)")
 DAILY_FREE_LIMIT = int(os.getenv("DAILY_FREE_LIMIT", "10"))
 
 PAY_TO_ADDRESS = os.getenv("PAY_TO_ADDRESS", "").strip()
