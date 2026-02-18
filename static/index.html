@@ -71,7 +71,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
   <div class="badge">
     <div class="pill" id="authState">Not signed in</div>
-    <div class="pill" id="quotaState">Free left today: —</div>
+    <div class="pill" id="quotaState">Fast works without login • Full Scan is PRO</div>
   </div>
 
   <div class="row" style="margin-bottom:10px">
@@ -81,12 +81,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
   <div id="loginBox">
     <div class="row">
-      <input id="email" placeholder="Email to receive a magic link" />
+      <input id="email" placeholder="Email to receive a magic link (optional)" />
       <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendMagicLink()">SEND</button>
     </div>
     <div class="small">
-      We’ll email you a <b>magic link</b>. Tap “Log In” to sign in.<br>
-      Free: 10 Fast checks/day. PRO: unlimited + Full Scan (X Beta).
+      Login is optional for <b>Fast</b>. Needed for Free quota (10/day) + PRO + Full Scan.
     </div>
     <hr>
   </div>
@@ -97,7 +96,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   </div>
 
   <input type="text" id="url" placeholder="Paste video link here..." />
-  <button onclick="check()" id="btn" class="action-btn" disabled>CHECK LINK</button>
+  <button onclick="check()" id="btn" class="action-btn">CHECK LINK</button>
 
   <div id="result"></div>
 
@@ -158,16 +157,10 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   const modal = document.getElementById("paymentModal");
 
   let MODE = "fast";
-  let AUTH_READY = false;
 
   function setMode(m){
     MODE = m;
     alert("Mode: " + (MODE === "fast" ? "Fast Check" : "Full Scan (X • PRO)"));
-  }
-
-  function setScanUiEnabled(enabled){
-    const scanBtn = document.getElementById("btn");
-    if (scanBtn) scanBtn.disabled = !enabled;
   }
 
   function setAuthPill(text){
@@ -180,14 +173,10 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   }
 
   async function refreshMe() {
-    setScanUiEnabled(false);
-    AUTH_READY = false;
-
     const { data: { session } } = await sb.auth.getSession();
-
     if (!session) {
       setAuthPill("Not signed in");
-      setQuotaPill("Free left today: —");
+      setQuotaPill("Fast works without login • Full Scan is PRO");
       return;
     }
 
@@ -209,10 +198,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       }
 
       if (me.is_pro) setQuotaPill("PRO Active: Unlimited");
-      else setQuotaPill("Free left today: " + me.free_left_today + " / " + me.daily_free_limit);
-
-      AUTH_READY = true;
-      setScanUiEnabled(true);
+      else setQuotaPill("Free left today: " + me.free_left_today + " / " + me.daily_free_limit + " (logged-in only)");
     } catch (e) {
       setQuotaPill("Network error");
     }
@@ -276,17 +262,29 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     const url = input.value.trim();
 
     if (!url) { alert("Paste a link first."); return; }
-    if (!AUTH_READY) { alert("Please wait… session is initializing. Tap 'Refresh status' once."); return; }
 
     const { data: { session } } = await sb.auth.getSession();
-    if (!session) { alert("Please sign in first."); return; }
+
+    // Full scan requires login + PRO (server enforces PRO)
+    if (MODE === "full" && !session) {
+      openModal();
+      alert("Full Scan requires login + PRO.");
+      return;
+    }
 
     btn.disabled = true;
     btn.textContent = "CHECKING…";
     document.getElementById("result").innerHTML = "";
 
     try {
-      if (MODE === "fast") {
+      const endpoint = (MODE === "full") ? "/analyze_full" : "/analyze";
+      const headers = { "Content-Type": "application/json" };
+
+      // Auth header only when logged in (needed for full + for quota)
+      if (session) headers["Authorization"] = "Bearer " + session.access_token;
+
+      // If logged in and FAST: apply free quota via backend
+      if (MODE === "fast" && session) {
         const quota = await fetch("/api/consume-scan", {
           method: "POST",
           headers: {
@@ -299,7 +297,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         if (!quota.ok || quota.allowed === false) {
           document.getElementById("result").innerHTML = `<div class="res-box res-high">
             <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
-            <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited + Full Scan.</div>
+            <div style="margin-top:6px;color:#fff">Free quota reached. Get PRO for unlimited + Full Scan.</div>
           </div>`;
           openModal();
           await refreshMe();
@@ -307,11 +305,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         }
       }
 
-      const endpoint = (MODE === "full") ? "/analyze_full" : "/analyze";
-      const headers = { "Content-Type": "application/json" };
-      if (endpoint === "/analyze_full") headers["Authorization"] = "Bearer " + session.access_token;
-
-      // HARD client timeout (prevents infinite "CHECKING...")
+      // HARD client timeout
       const controller = new AbortController();
       const timeoutMs = (endpoint === "/analyze_full") ? 25000 : 12000;
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -328,7 +322,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         if (String(e).includes("AbortError")) {
           document.getElementById("result").innerHTML = `<div class="res-box res-high">
             <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">TIMEOUT</div>
-            <div style="margin-top:6px;color:#fff">Request timed out. X may block downloads. Try again or use Fast Check.</div>
+            <div style="margin-top:6px;color:#fff">Request timed out. X may block downloads. Try again or use Fast.</div>
           </div>`;
           return;
         }
@@ -355,6 +349,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
       renderResult(data);
       await refreshMe();
+
     } catch (e) {
       document.getElementById("result").innerHTML = `<div class="res-box res-high">
         <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
@@ -411,16 +406,16 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     await refreshMe();
   }
 
-  sb.auth.onAuthStateChange(async () => {
-    closeModal();
-    await refreshMe();
-    setTimeout(() => refreshMe(), 500);
-  });
-
+  // Handle magic link return
   (async () => {
     try {
       const href = window.location.href;
       const url = new URL(href);
+
+      if (window.location.hash && window.location.hash.includes("error=")) {
+        // Clean URL on auth error to avoid loops
+        window.history.replaceState({}, document.title, window.location.origin);
+      }
 
       if (url.searchParams.get("code")) {
         await sb.auth.exchangeCodeForSession(href);
@@ -444,7 +439,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
     closeModal();
     await refreshMe();
-    setTimeout(() => refreshMe(), 600);
   })();
 </script>
 </body>
