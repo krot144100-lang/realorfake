@@ -1,4 +1,5 @@
 import os, re, datetime, tempfile
+import multiprocessing as mp
 import requests
 from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_from_directory
@@ -281,21 +282,42 @@ def download_video_x(url: str, out_dir: str):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "socket_timeout": 10,
+        "retries": 1,
+        "fragment_retries": 1,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         },
     }
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.extract_info(url, download=True)
+        for ext in ["mp4", "mkv", "webm"]:
+            p = os.path.join(out_dir, f"video.{ext}")
+            if os.path.exists(p):
+                return p
+    return None
+
+def _dl_worker(url, out_dir, q):
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(url, download=True)
-            for ext in ["mp4", "mkv", "webm"]:
-                p = os.path.join(out_dir, f"video.{ext}")
-                if os.path.exists(p):
-                    return p
+        path = download_video_x(url, out_dir)
+        q.put(path)
+    except Exception:
+        q.put(None)
+
+def download_video_x_with_timeout(url: str, out_dir: str, timeout_sec: int = 15):
+    q = mp.Queue()
+    p = mp.Process(target=_dl_worker, args=(url, out_dir, q))
+    p.start()
+    p.join(timeout_sec)
+    if p.is_alive():
+        p.terminate()
+        p.join(2)
+        return None
+    try:
+        return q.get_nowait()
     except Exception:
         return None
-    return None
 
 def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
     cap = cv2.VideoCapture(video_path)
@@ -442,8 +464,9 @@ def analyze_full():
                 "note": "Full Scan supports X links. Returned Fast Check fallback."
             })
 
+        # X -> download with hard timeout
         with tempfile.TemporaryDirectory() as td:
-            path = download_video_x(url, td)
+            path = download_video_x_with_timeout(url, td, timeout_sec=15)
             if not path:
                 score, verdict, reasons = fast_check_score(url)
                 return jsonify({
@@ -451,9 +474,9 @@ def analyze_full():
                     "result": "fake" if verdict == "high_risk" else "real",
                     "percent": int(score),
                     "verdict": verdict,
-                    "reasons": (["Download failed; returned Fast Check fallback."] + reasons)[:6],
+                    "reasons": (["Download timed out/blocked; returned Fast Check fallback."] + reasons)[:6],
                     "type": "fast_check_fallback",
-                    "note": "Could not download X video. Returned Fast Check fallback."
+                    "note": "Could not download X video within timeout. Returned Fast Check fallback."
                 })
 
             score, reasons = analyze_video_frames_basic(path, max_frames=12)
