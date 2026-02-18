@@ -10,13 +10,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sa
 .container{width:100%;max-width:520px;background:var(--card);padding:34px 26px;border-radius:24px;box-shadow:0 10px 40px rgba(255,0,128,.10);border:1px solid var(--line);text-align:center}
 h1{margin:0 0 6px;font-size:32px;letter-spacing:-1px;background:linear-gradient(to right,#fff,#888);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .subtitle{color:var(--muted);margin-bottom:18px;font-size:14px;line-height:1.4}
-.badge{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:10px 0 18px}
+.badge{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:10px 0 12px}
 .pill{background:#0b0b0b;border:1px solid #262626;color:#bdbdbd;font-size:12px;padding:7px 10px;border-radius:999px}
 input{width:100%;padding:16px;margin-bottom:12px;background:#1a1a1a;border:1px solid #333;border-radius:12px;color:#fff;font-size:15px;outline:none;box-sizing:border-box;transition:.2s}
 input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(255,0,128,.2)}
 button.action-btn{width:100%;padding:16px;background:#fff;color:#000;border:none;border-radius:12px;font-size:15px;font-weight:900;cursor:pointer;transition:.2s;text-transform:uppercase;letter-spacing:1px}
 button.action-btn:hover{transform:scale(1.01);background:#f0f0f0}
 button.action-btn:disabled{opacity:.55;cursor:wait;transform:none}
+button.secondary{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.12);text-transform:none;letter-spacing:0;font-weight:800}
+button.secondary:hover{background:rgba(255,255,255,.10)}
 #result{margin-top:18px;min-height:20px}
 .res-box{padding:18px;border-radius:16px;animation:popIn .25s;text-align:left}
 .res-high{background:rgba(255,23,68,.15);border:2px solid #ff1744;color:#ff7d8f}
@@ -27,7 +29,7 @@ button.action-btn:disabled{opacity:.55;cursor:wait;transform:none}
 .pay-big:hover{transform:scale(1.01);box-shadow:0 15px 40px rgba(255,0,128,.45)}
 .pay-sub{font-size:12px;opacity:.85;font-weight:normal;margin-top:6px;display:block}
 .small{font-size:12px;color:#9aa0aa;line-height:1.4;margin-top:10px}
-hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
+hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 .row{display:flex;gap:10px}
 .row > *{flex:1}
 .modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);backdrop-filter:blur(5px);z-index:999;display:flex;justify-content:center;align-items:center;opacity:0;visibility:hidden;transition:.25s}
@@ -51,6 +53,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
   <div class="badge">
     <div class="pill" id="authState">Not signed in</div>
     <div class="pill" id="quotaState">Free left today: —</div>
+  </div>
+
+  <div class="row" style="margin-bottom:10px">
+    <button class="action-btn secondary" onclick="refreshMe()">Refresh status</button>
+    <button class="action-btn secondary" onclick="signOut()">Sign out</button>
   </div>
 
   <!-- LOGIN (MAGIC LINK) -->
@@ -148,6 +155,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
       if (me.is_pro) document.getElementById("quotaState").textContent = "PRO Active: Unlimited";
       else document.getElementById("quotaState").textContent = "Free left today: " + me.free_left_today + " / " + me.daily_free_limit;
     }
+  }
+
+  async function signOut() {
+    await sb.auth.signOut();
+    await refreshMe();
   }
 
   async function sendMagicLink() {
@@ -295,48 +307,46 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
     await refreshMe();
   }
 
-  // React to auth changes (important for magic links)
-  sb.auth.onAuthStateChange(async (event, session) => {
+  // React to auth changes (helps after magic link)
+  sb.auth.onAuthStateChange(async () => {
     await refreshMe();
   });
 
-  // Handle return from magic link + load session
- (async () => {
-  try {
-    const href = window.location.href;
-    const url = new URL(href);
+  // Handle return from magic link:
+  // - ?code=... flow
+  // - #access_token=...&refresh_token=... flow
+  (async () => {
+    try {
+      const href = window.location.href;
+      const url = new URL(href);
 
-    // Case 1: code flow (?code=...)
-    if (url.searchParams.get("code")) {
-      await sb.auth.exchangeCodeForSession(href);
-      window.history.replaceState({}, document.title, window.location.origin);
-    }
-
-    // Case 2: implicit flow in hash (#access_token=...&refresh_token=...)
-    if (window.location.hash && window.location.hash.includes("access_token=")) {
-      const hash = new URLSearchParams(window.location.hash.substring(1));
-      const access_token = hash.get("access_token");
-      const refresh_token = hash.get("refresh_token");
-      const expires_in = parseInt(hash.get("expires_in") || "3600", 10);
-
-      if (access_token && refresh_token) {
-        await sb.auth.setSession({
-          access_token,
-          refresh_token,
-          expires_in
-        });
-        // clean URL (remove tokens from address bar)
+      // Case 1: code flow
+      if (url.searchParams.get("code")) {
+        await sb.auth.exchangeCodeForSession(href);
         window.history.replaceState({}, document.title, window.location.origin);
       }
+
+      // Case 2: hash tokens flow
+      if (window.location.hash && window.location.hash.includes("access_token=")) {
+        const hash = new URLSearchParams(window.location.hash.substring(1));
+        const access_token = hash.get("access_token");
+        const refresh_token = hash.get("refresh_token");
+        const expires_in = parseInt(hash.get("expires_in") || "3600", 10);
+
+        if (access_token && refresh_token) {
+          await sb.auth.setSession({ access_token, refresh_token, expires_in });
+          // Remove tokens from URL
+          window.history.replaceState({}, document.title, window.location.origin);
+        }
+      }
+
+      await sb.auth.getSession();
+    } catch (e) {
+      // ignore
     }
 
-    await sb.auth.getSession();
-  } catch (e) {
-    // ignore
-  }
-
-  await refreshMe();
-})();
+    await refreshMe();
+  })();
 </script>
 </body>
 </html>
