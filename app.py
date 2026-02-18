@@ -1,7 +1,7 @@
 import os, re, datetime, tempfile
 import multiprocessing as mp
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 from flask import Flask, request, jsonify, send_from_directory
 
 import numpy as np
@@ -18,7 +18,6 @@ DAILY_FREE_LIMIT = int(os.getenv("DAILY_FREE_LIMIT", "10"))
 
 PAY_TO_ADDRESS = (os.getenv("PAY_TO_ADDRESS") or "").strip()
 
-# Prices
 STARTER_PRICE = float(os.getenv("STARTER_PRICE_USDT", "5.00"))
 PRO_PRICE = float(os.getenv("PRO_PRICE_USDT", "9.00"))
 
@@ -32,6 +31,20 @@ if not SUPABASE_SECRET_KEY:
 
 REST_BASE = f"{SUPABASE_URL}/rest/v1"
 AUTH_USER_ENDPOINT = f"{SUPABASE_URL}/auth/v1/user"
+
+# ===== URL HELPERS =====
+def strip_query(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except Exception:
+        return url
+
+def normalize_x_for_download(url: str) -> str:
+    u = (url or "").strip()
+    u = u.replace("https://x.com/", "https://twitter.com/")
+    u = u.replace("http://x.com/", "https://twitter.com/")
+    return u
 
 # ===== TIME =====
 def utc_now():
@@ -49,10 +62,7 @@ def get_bearer_token():
     return auth.replace("Bearer ", "").strip() or None
 
 def get_user_from_access_token(access_token: str):
-    headers = {
-        "apikey": SUPABASE_SECRET_KEY,
-        "Authorization": f"Bearer {access_token}",
-    }
+    headers = {"apikey": SUPABASE_SECRET_KEY, "Authorization": f"Bearer {access_token}"}
     r = requests.get(AUTH_USER_ENDPOINT, headers=headers, timeout=15)
     if r.status_code != 200:
         return None
@@ -216,6 +226,7 @@ def contains_ai_terms(text: str):
     return False, None
 
 def fast_check_score(url: str):
+    url = strip_query(url)
     url_l = (url or "").strip().lower()
     reasons, score = [], 0
 
@@ -279,7 +290,7 @@ def fast_check_score(url: str):
 
 # ===== FULL SCAN (PRO-only) =====
 def is_x_status_url(url: str) -> bool:
-    u = (url or "").lower()
+    u = strip_query(url).lower()
     return ("x.com" in u or "twitter.com" in u) and ("/status/" in u)
 
 def download_video_x(url: str, out_dir: str):
@@ -296,6 +307,7 @@ def download_video_x(url: str, out_dir: str):
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://twitter.com/",
         },
     }
     with YoutubeDL(ydl_opts) as ydl:
@@ -374,8 +386,10 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 10):
 
 def _fullscan_worker(url, q):
     try:
+        url = strip_query(url)
+        dl_url = normalize_x_for_download(url)  # key improvement
         with tempfile.TemporaryDirectory() as td:
-            path = download_video_x(url, td)
+            path = download_video_x(dl_url, td)
             if not path:
                 q.put({"ok": False, "stage": "download"})
                 return
@@ -417,7 +431,7 @@ def index():
 def analyze():
     try:
         data = request.get_json() or {}
-        url = (data.get("url", "") or "").strip()
+        url = strip_query((data.get("url", "") or "").strip())
 
         score, verdict, reasons = fast_check_score(url)
         if verdict == "invalid_url":
@@ -450,7 +464,7 @@ def analyze_full():
             return jsonify({"ok": False, "error": "pro_required", "message": "Full Scan (X Beta) is available in PRO plan."}), 402
 
         data = request.get_json() or {}
-        url = (data.get("url", "") or "").strip()
+        url = strip_query((data.get("url", "") or "").strip())
 
         if not is_x_status_url(url):
             score, verdict, reasons = fast_check_score(url)
@@ -546,7 +560,6 @@ def api_consume_scan():
 
     profile = reset_daily_if_needed(ensure_profile(user))
 
-    # Paid (starter or pro) -> unlimited fast checks
     if is_paid(profile):
         return jsonify({"ok": True, "allowed": True, "reason": "paid"})
 
