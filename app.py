@@ -8,7 +8,13 @@ import cv2
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-
+@app.get("/healthz")
+def healthz():
+    return jsonify({
+        "ok": True,
+        "service": "realorfake",
+        "has_analyze_full": True
+    })
 # ===== ENV =====
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
 SUPABASE_SECRET_KEY = (os.getenv("SUPABASE_SECRET_KEY") or "").strip()  # sb_secret_...
