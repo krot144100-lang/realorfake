@@ -32,8 +32,29 @@ button.secondary:hover{background:rgba(255,255,255,.10)}
 hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 .row{display:flex;gap:10px}
 .row > *{flex:1}
-.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);backdrop-filter:blur(5px);z-index:999;display:flex;justify-content:center;align-items:center;opacity:0;visibility:hidden;transition:.25s}
-.modal-overlay.active{opacity:1;visibility:visible}
+
+/* MODAL: key fix = pointer-events none when hidden */
+.modal-overlay{
+  position:fixed;
+  top:0; left:0;
+  width:100%; height:100%;
+  background:rgba(0,0,0,.8);
+  backdrop-filter:blur(5px);
+  z-index:999;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  opacity:0;
+  visibility:hidden;
+  transition:.25s;
+  pointer-events:none; /* IMPORTANT */
+}
+.modal-overlay.active{
+  opacity:1;
+  visibility:visible;
+  pointer-events:auto; /* clickable only when active */
+}
+
 .modal-box{background:#141414;padding:22px;border-radius:22px;width:92%;max-width:420px;position:relative;border:1px solid #333;text-align:left;transform:translateY(16px);transition:.25s}
 .modal-overlay.active .modal-box{transform:translateY(0)}
 .close-btn{position:absolute;top:12px;right:16px;font-size:28px;cursor:pointer;color:#666}
@@ -159,6 +180,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
   async function signOut() {
     await sb.auth.signOut();
+    closeModal();
     await refreshMe();
   }
 
@@ -185,7 +207,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     const btn = document.getElementById("btn");
     const resDiv = document.getElementById("result");
     const url = input.value.trim();
-    if (!url) return;
+
+    if (!url) {
+      alert("Paste a link first.");
+      return;
+    }
 
     const { data: { session } } = await sb.auth.getSession();
     if (!session) {
@@ -197,33 +223,32 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     btn.textContent = "CHECKING...";
     resDiv.innerHTML = "";
 
-    const quota = await fetch("/api/consume-scan", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + session.access_token
-      },
-      body: JSON.stringify({})
-    }).then(r => r.json());
-
-    if (!quota.ok || quota.allowed === false) {
-      btn.disabled = false;
-      btn.textContent = "CHECK LINK";
-      resDiv.innerHTML = `<div class="res-box res-high">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
-        <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited checks.</div>
-      </div>`;
-      openModal();
-      await refreshMe();
-      return;
-    }
-
     try {
+      const quota = await fetch("/api/consume-scan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + session.access_token
+        },
+        body: JSON.stringify({})
+      }).then(r => r.json());
+
+      if (!quota.ok || quota.allowed === false) {
+        resDiv.innerHTML = `<div class="res-box res-high">
+          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
+          <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited checks.</div>
+        </div>`;
+        openModal();
+        await refreshMe();
+        return;
+      }
+
       const response = await fetch("/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url })
       });
+
       const data = await response.json();
 
       const reasons = (data.reasons || []).map(r => `<div style="font-size:12px;opacity:.95;margin-top:6px;color:#fff">• ${r}</div>`).join("");
@@ -253,11 +278,14 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
       await refreshMe();
     } catch (e) {
-      resDiv.innerHTML = `<div style="color:red">Server Error. Please try again.</div>`;
+      resDiv.innerHTML = `<div class="res-box res-high">
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
+        <div style="margin-top:6px;color:#fff">${(e && e.message) ? e.message : "Unknown error"}</div>
+      </div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "CHECK LINK";
     }
-
-    btn.disabled = false;
-    btn.textContent = "CHECK LINK";
   }
 
   function openModal() {
@@ -304,17 +332,17 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     }
 
     document.getElementById("payStatus").textContent = "PRO activated. Unlimited checks enabled.";
+    closeModal();
     await refreshMe();
   }
 
   // React to auth changes (helps after magic link)
   sb.auth.onAuthStateChange(async () => {
+    closeModal(); // IMPORTANT: ensure no overlay blocks taps
     await refreshMe();
   });
 
-  // Handle return from magic link:
-  // - ?code=... flow
-  // - #access_token=...&refresh_token=... flow
+  // Handle return from magic link + make sure overlay is closed
   (async () => {
     try {
       const href = window.location.href;
@@ -326,7 +354,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         window.history.replaceState({}, document.title, window.location.origin);
       }
 
-      // Case 2: hash tokens flow
+      // Case 2: hash tokens flow (#access_token=...&refresh_token=...)
       if (window.location.hash && window.location.hash.includes("access_token=")) {
         const hash = new URLSearchParams(window.location.hash.substring(1));
         const access_token = hash.get("access_token");
@@ -335,7 +363,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
         if (access_token && refresh_token) {
           await sb.auth.setSession({ access_token, refresh_token, expires_in });
-          // Remove tokens from URL
           window.history.replaceState({}, document.title, window.location.origin);
         }
       }
@@ -345,6 +372,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       // ignore
     }
 
+    closeModal(); // IMPORTANT: fix "overlay blocks all clicks" after login
     await refreshMe();
   })();
 </script>
