@@ -2,3 +2,6 @@ Flask==3.0.0
 gunicorn==21.2.0
 requests==2.31.0
 python-dotenv==1.0.0
+opencv-python-headless==4.11.0.86
+yt-dlp==2025.1.26
+numpy==2.2.2
