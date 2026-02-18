@@ -301,17 +301,42 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:18px 0}
   });
 
   // Handle return from magic link + load session
-  (async () => {
-    try {
-      const url = new URL(window.location.href);
-      if (url.searchParams.get("code")) {
-        await sb.auth.exchangeCodeForSession(window.location.href);
+ (async () => {
+  try {
+    const href = window.location.href;
+    const url = new URL(href);
+
+    // Case 1: code flow (?code=...)
+    if (url.searchParams.get("code")) {
+      await sb.auth.exchangeCodeForSession(href);
+      window.history.replaceState({}, document.title, window.location.origin);
+    }
+
+    // Case 2: implicit flow in hash (#access_token=...&refresh_token=...)
+    if (window.location.hash && window.location.hash.includes("access_token=")) {
+      const hash = new URLSearchParams(window.location.hash.substring(1));
+      const access_token = hash.get("access_token");
+      const refresh_token = hash.get("refresh_token");
+      const expires_in = parseInt(hash.get("expires_in") || "3600", 10);
+
+      if (access_token && refresh_token) {
+        await sb.auth.setSession({
+          access_token,
+          refresh_token,
+          expires_in
+        });
+        // clean URL (remove tokens from address bar)
         window.history.replaceState({}, document.title, window.location.origin);
       }
-      await sb.auth.getSession();
-    } catch (e) {}
-    await refreshMe();
-  })();
+    }
+
+    await sb.auth.getSession();
+  } catch (e) {
+    // ignore
+  }
+
+  await refreshMe();
+})();
 </script>
 </body>
 </html>
