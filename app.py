@@ -319,9 +319,13 @@ def download_video_x(url: str, out_dir: str):
     return None
 
 def analyze_video_frames_basic(video_path: str, max_frames: int = 10):
+    """
+    Returns: score(0-100), reasons(list), frames_analyzed(int)
+    New scale: unusually low sharpness ~60% (Medium).
+    """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        return 0, ["Could not open video for analysis"]
+        return 0, ["Could not open video for analysis"], 0
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     step = max(1, total // max_frames) if total > 0 else 10
@@ -355,7 +359,7 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 10):
     cap.release()
 
     if frames_read < 3:
-        return 0, ["Not enough frames to analyze"]
+        return 0, ["Not enough frames to analyze"], frames_read
 
     sharp_m = float(np.median(blur_scores))
     tex_m = float(np.median(texture_scores))
@@ -364,37 +368,41 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 10):
     score = 0
 
     if sharp_m < 80:
-        score += 35
+        score += 60
         reasons.append("Frame signal: unusually low sharpness (over-smoothed look)")
     elif sharp_m < 140:
-        score += 18
+        score += 35
         reasons.append("Frame signal: slightly low sharpness (possible heavy filtering)")
 
     if tex_m < 4.3:
-        score += 35
+        score += 25
         reasons.append("Frame signal: low texture detail (synthetic/denoised appearance)")
     elif tex_m < 4.8:
-        score += 18
+        score += 12
         reasons.append("Frame signal: reduced texture detail (possible AI smoothing)")
 
-    if score >= 60:
-        score += 10
-        reasons.append("Combined signal: multiple synthetic-looking frame patterns")
+    if score >= 70:
+        reasons.append("Combined signal: multiple synthetic-looking patterns")
 
     score = max(0, min(100, score))
-    return score, reasons[:6]
+    return score, reasons[:3], frames_read
 
 def _fullscan_worker(url, q):
     try:
         url = strip_query(url)
-        dl_url = normalize_x_for_download(url)  # key improvement
+        dl_url = normalize_x_for_download(url)
         with tempfile.TemporaryDirectory() as td:
             path = download_video_x(dl_url, td)
             if not path:
                 q.put({"ok": False, "stage": "download"})
                 return
-            score, reasons = analyze_video_frames_basic(path, max_frames=10)
-            q.put({"ok": True, "score": score, "reasons": reasons})
+            score, reasons, frames_read = analyze_video_frames_basic(path, max_frames=10)
+            q.put({
+                "ok": True,
+                "score": score,
+                "reasons": reasons,
+                "frames_analyzed": frames_read
+            })
     except Exception as e:
         q.put({"ok": False, "stage": "exception", "error": str(e)})
 
@@ -508,6 +516,15 @@ def analyze_full():
 
         score = float(result["score"])
         reasons = result["reasons"]
+        frames_analyzed = int(result.get("frames_analyzed") or 0)
+
+        if score >= 70:
+            strength = "High"
+        elif score >= 40:
+            strength = "Medium"
+        else:
+            strength = "Low"
+
         verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
 
         return jsonify({
@@ -517,7 +534,12 @@ def analyze_full():
             "verdict": verdict,
             "reasons": reasons,
             "type": "full_scan_beta",
-            "note": "Full Scan (Beta) uses lightweight frame heuristics. Not 100% proof."
+
+            "download_ok": True,
+            "frames_analyzed": frames_analyzed,
+            "signal_strength": strength,
+
+            "note": "Full Scan (Beta) uses lightweight video heuristics. Not 100% proof."
         })
 
     except Exception as e:
