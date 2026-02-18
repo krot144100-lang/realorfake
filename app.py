@@ -17,7 +17,10 @@ SUPABASE_SECRET_KEY = (os.getenv("SUPABASE_SECRET_KEY") or "").strip()  # sb_sec
 DAILY_FREE_LIMIT = int(os.getenv("DAILY_FREE_LIMIT", "10"))
 
 PAY_TO_ADDRESS = (os.getenv("PAY_TO_ADDRESS") or "").strip()
-PRICE_USDT = float(os.getenv("PRICE_USDT", "9.00"))
+
+# Prices
+STARTER_PRICE = float(os.getenv("STARTER_PRICE_USDT", "5.00"))
+PRO_PRICE = float(os.getenv("PRO_PRICE_USDT", "9.00"))
 
 TRONSCAN_API_BASE = (os.getenv("TRONSCAN_API_BASE") or "https://apilist.tronscan.org/api").strip()
 TRC20_USDT_CONTRACT = (os.getenv("TRC20_USDT_CONTRACT") or "").strip()
@@ -81,8 +84,10 @@ def profile_insert(user_id: str, email: str):
         "id": user_id,
         "email": email,
         "is_pro": False,
+        "pro_plan": None,
         "free_used_today": 0,
-        "free_reset_at": start_of_today_utc().isoformat()
+        "free_reset_at": start_of_today_utc().isoformat(),
+        "pro_activated_at": None
     }]
     headers = sb_headers_server()
     headers["Prefer"] = "return=representation"
@@ -116,6 +121,15 @@ def reset_daily_if_needed(profile):
     if reset_at < today:
         return profile_update(profile["id"], {"free_used_today": 0, "free_reset_at": today.isoformat()})
     return profile
+
+def is_paid(profile) -> bool:
+    return bool(profile.get("is_pro"))
+
+def plan(profile) -> str:
+    return (profile.get("pro_plan") or "").strip().lower()
+
+def has_full_scan(profile) -> bool:
+    return plan(profile) == "pro"
 
 # ===== TRONSCAN =====
 def tronscan_txinfo(txid):
@@ -432,13 +446,12 @@ def analyze_full():
             return jsonify({"ok": False, "error": "unauthorized"}), 401
 
         profile = reset_daily_if_needed(ensure_profile(user))
-        if not profile.get("is_pro"):
-            return jsonify({"ok": False, "error": "pro_required", "message": "Full Scan (Beta) is available in PRO."}), 402
+        if not has_full_scan(profile):
+            return jsonify({"ok": False, "error": "pro_required", "message": "Full Scan (X Beta) is available in PRO plan."}), 402
 
         data = request.get_json() or {}
         url = (data.get("url", "") or "").strip()
 
-        # Not X -> fallback fast
         if not is_x_status_url(url):
             score, verdict, reasons = fast_check_score(url)
             if verdict == "invalid_url":
@@ -455,7 +468,6 @@ def analyze_full():
 
         result = run_fullscan_with_timeout(url, timeout_sec=18)
 
-        # Timeout -> fallback fast
         if result is None:
             score, verdict, reasons = fast_check_score(url)
             return jsonify({
@@ -468,7 +480,6 @@ def analyze_full():
                 "note": "Full Scan timed out. Returned Fast Check fallback."
             })
 
-        # Download/analyze failed -> fallback
         if not result.get("ok"):
             score, verdict, reasons = fast_check_score(url)
             return jsonify({
@@ -510,14 +521,17 @@ def api_me():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     profile = reset_daily_if_needed(ensure_profile(user))
-    left = None if profile["is_pro"] else max(0, DAILY_FREE_LIMIT - int(profile["free_used_today"]))
+    left = None if is_paid(profile) else max(0, DAILY_FREE_LIMIT - int(profile["free_used_today"]))
 
     return jsonify({
         "ok": True,
         "user": {"id": user["id"], "email": user.get("email")},
-        "is_pro": profile["is_pro"],
+        "is_paid": is_paid(profile),
+        "plan": plan(profile) or None,
+        "has_full_scan": has_full_scan(profile),
         "free_left_today": left,
-        "daily_free_limit": DAILY_FREE_LIMIT
+        "daily_free_limit": DAILY_FREE_LIMIT,
+        "prices": {"starter": STARTER_PRICE, "pro": PRO_PRICE}
     })
 
 @app.post("/api/consume-scan")
@@ -531,8 +545,10 @@ def api_consume_scan():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     profile = reset_daily_if_needed(ensure_profile(user))
-    if profile["is_pro"]:
-        return jsonify({"ok": True, "allowed": True, "reason": "pro"})
+
+    # Paid (starter or pro) -> unlimited fast checks
+    if is_paid(profile):
+        return jsonify({"ok": True, "allowed": True, "reason": "paid"})
 
     used = int(profile["free_used_today"])
     if used >= DAILY_FREE_LIMIT:
@@ -555,21 +571,27 @@ def api_submit_txid():
 
     body = request.get_json() or {}
     txid = (body.get("txid", "") or "").strip()
+    plan_req = (body.get("plan") or "pro").strip().lower()
+    if plan_req not in ("starter", "pro"):
+        plan_req = "pro"
+
     if len(txid) < 10:
         return jsonify({"ok": False, "error": "txid_required"}), 400
+
+    min_amount = STARTER_PRICE if plan_req == "starter" else PRO_PRICE
 
     ok, code, meta = verify_usdt_trc20_tx(
         txid=txid,
         expected_to=PAY_TO_ADDRESS,
         usdt_contract=TRC20_USDT_CONTRACT,
-        min_amount=PRICE_USDT
+        min_amount=min_amount
     )
     if not ok:
         return jsonify({"ok": False, "error": code, "meta": meta}), 400
 
     profile_update(user["id"], {
         "is_pro": True,
-        "pro_plan": "lifetime_pro",
+        "pro_plan": plan_req,
         "pro_activated_at": utc_now().isoformat()
     })
-    return jsonify({"ok": True, "status": "activated", "is_pro": True, "meta": meta})
+    return jsonify({"ok": True, "status": "activated", "plan": plan_req, "meta": meta})
