@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>REALorFAKE – Fast Risk Check</title>
+<title>REALorFAKE – Risk Check</title>
 <style>
 :root { --bg:#000; --card:#111; --text:#fff; --accent:#ff0080; --muted:#888; --line:#222; }
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px;min-height:100vh;display:flex;align-items:center;justify-content:center}
@@ -33,7 +33,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 .row{display:flex;gap:10px}
 .row > *{flex:1}
 
-/* MODAL: important fix = no pointer events when hidden */
+/* MODAL FIX */
 .modal-overlay{
   position:fixed; top:0; left:0;
   width:100%; height:100%;
@@ -79,15 +79,15 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     <button class="action-btn secondary" onclick="signOut()">Sign out</button>
   </div>
 
-  <!-- LOGIN (MAGIC LINK) -->
+  <!-- LOGIN -->
   <div id="loginBox">
     <div class="row">
       <input id="email" placeholder="Email to receive a magic link" />
       <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendMagicLink()">SEND</button>
     </div>
     <div class="small">
-      We’ll email you a <b>magic link</b>. Tap “Log In” in your email to sign in.<br>
-      Free: 10 checks/day. PRO: unlimited + Full Scan (X).
+      We’ll email you a <b>magic link</b>. Tap “Log In” to sign in.<br>
+      Free: 10 Fast checks/day. PRO: unlimited + Full Scan (X Beta).
     </div>
     <hr>
   </div>
@@ -100,7 +100,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
   <!-- SCAN -->
   <input type="text" id="url" placeholder="Paste video link here..." />
-  <button onclick="check()" id="btn" class="action-btn">CHECK LINK</button>
+  <button onclick="check()" id="btn" class="action-btn" disabled>CHECK LINK</button>
 
   <div id="result"></div>
 
@@ -110,7 +110,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   </a>
 
   <div class="small">
-    Fast Check is link-based. Full Scan (Beta) uses lightweight frame heuristics. Not 100% proof.
+    Fast Check is link-based. Full Scan (Beta) is best-effort and may be less confident on CGI/animation.
   </div>
 </div>
 
@@ -127,7 +127,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     <div class="warn"><b>TRC20 only.</b> Do not send ERC20/BEP20.</div>
 
     <div style="margin-top:12px;color:#fff;font-weight:900">USDT (TRC20) • $9.00</div>
-    <div class="crypto-box" onclick="copyAddress()" id="addrBox">TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB</div>
+    <div class="crypto-box" onclick="copyAddress()">TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB</div>
     <div class="small">(Tap address to copy)</div>
 
     <div style="display:flex;justify-content:center;margin-top:10px;">
@@ -158,32 +158,67 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   const SUPABASE_ANON_KEY = "sb_publishable_I0bbQ83Qw6pVidgdlO-GcQ_64BEQGtM";
 
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
   const addr = "TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB";
   const modal = document.getElementById("paymentModal");
 
   let MODE = "fast";
+  let AUTH_READY = false;
+
   function setMode(m){
     MODE = m;
     alert("Mode: " + (MODE === "fast" ? "Fast Check" : "Full Scan (X • PRO)"));
   }
 
+  function setScanUiEnabled(enabled){
+    const scanBtn = document.getElementById("btn");
+    if (scanBtn) scanBtn.disabled = !enabled;
+  }
+
+  function setAuthPill(text){
+    const el = document.getElementById("authState");
+    if (el) el.textContent = text;
+  }
+  function setQuotaPill(text){
+    const el = document.getElementById("quotaState");
+    if (el) el.textContent = text;
+  }
+
   async function refreshMe() {
+    setScanUiEnabled(false);
+    AUTH_READY = false;
+
     const { data: { session } } = await sb.auth.getSession();
+
     if (!session) {
-      document.getElementById("authState").textContent = "Not signed in";
-      document.getElementById("quotaState").textContent = "Free left today: —";
+      setAuthPill("Not signed in");
+      setQuotaPill("Free left today: —");
       return;
     }
-    document.getElementById("authState").textContent = "Signed in: " + session.user.email;
 
-    const me = await fetch("/api/me", {
-      headers: { "Authorization": "Bearer " + session.access_token }
-    }).then(r => r.json());
+    setAuthPill("Signed in: " + session.user.email);
+    setQuotaPill("Loading…");
 
-    if (me.ok) {
-      if (me.is_pro) document.getElementById("quotaState").textContent = "PRO Active: Unlimited";
-      else document.getElementById("quotaState").textContent = "Free left today: " + me.free_left_today + " / " + me.daily_free_limit;
+    try {
+      const resp = await fetch("/api/me", {
+        headers: { "Authorization": "Bearer " + session.access_token }
+      });
+
+      const text = await resp.text();
+      let me = null;
+      try { me = JSON.parse(text); } catch(e) {}
+
+      if (!resp.ok || !me || !me.ok) {
+        setQuotaPill("Auth error: " + resp.status);
+        return;
+      }
+
+      if (me.is_pro) setQuotaPill("PRO Active: Unlimited");
+      else setQuotaPill("Free left today: " + me.free_left_today + " / " + me.daily_free_limit);
+
+      AUTH_READY = true;
+      setScanUiEnabled(true);
+    } catch (e) {
+      setQuotaPill("Network error");
     }
   }
 
@@ -213,24 +248,25 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     const resDiv = document.getElementById("result");
     const reasons = (data.reasons || []).map(r => `<div style="font-size:12px;opacity:.95;margin-top:6px;color:#fff">• ${r}</div>`).join("");
     const pct = (data.percent ?? 0);
+    const label = (data.type || "result").toUpperCase();
 
     if (data.verdict === "high_risk") {
       resDiv.innerHTML = `<div class="res-box res-high">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${(data.type || "RESULT").toUpperCase()}</div>
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
         <span class="res-percent">${pct}%</span>
         <div style="font-size:14px;color:#fff">High risk of AI manipulation.</div>
         <div style="margin-top:10px">${reasons}</div>
       </div>`;
     } else if (data.verdict === "medium_risk") {
       resDiv.innerHTML = `<div class="res-box res-med">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${(data.type || "RESULT").toUpperCase()}</div>
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
         <span class="res-percent">${pct}%</span>
         <div style="font-size:14px;color:#fff">Medium risk. Verify before reposting.</div>
         <div style="margin-top:10px">${reasons}</div>
       </div>`;
     } else {
       resDiv.innerHTML = `<div class="res-box res-low">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${(data.type || "RESULT").toUpperCase()}</div>
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
         <span class="res-percent">${pct}%</span>
         <div style="font-size:14px;color:#fff">Low risk based on signals.</div>
         <div style="margin-top:10px">${reasons}</div>
@@ -243,23 +279,18 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     const btn = document.getElementById("btn");
     const url = input.value.trim();
 
-    if (!url) {
-      alert("Paste a link first.");
-      return;
-    }
+    if (!url) { alert("Paste a link first."); return; }
+    if (!AUTH_READY) { alert("Please wait… session is initializing. Tap 'Refresh status' once."); return; }
 
     const { data: { session } } = await sb.auth.getSession();
-    if (!session) {
-      alert("Please sign in to use free checks (10/day) or PRO.");
-      return;
-    }
+    if (!session) { alert("Please sign in first."); return; }
 
     btn.disabled = true;
-    btn.textContent = "CHECKING...";
+    btn.textContent = "CHECKING…";
     document.getElementById("result").innerHTML = "";
 
     try {
-      // For Fast mode: consume free quota (unless PRO)
+      // Fast mode consumes free quota (unless PRO)
       if (MODE === "fast") {
         const quota = await fetch("/api/consume-scan", {
           method: "POST",
@@ -273,7 +304,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         if (!quota.ok || quota.allowed === false) {
           document.getElementById("result").innerHTML = `<div class="res-box res-high">
             <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
-            <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited checks + Full Scan.</div>
+            <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited + Full Scan.</div>
           </div>`;
           openModal();
           await refreshMe();
@@ -282,7 +313,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       }
 
       const endpoint = (MODE === "full") ? "/analyze_full" : "/analyze";
-
       const headers = { "Content-Type": "application/json" };
       if (endpoint === "/analyze_full") headers["Authorization"] = "Bearer " + session.access_token;
 
@@ -292,9 +322,16 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         body: JSON.stringify({ url })
       });
 
-      const data = await response.json();
+      const text = await response.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch(e) {
+        document.getElementById("result").innerHTML = `<div class="res-box res-high">
+          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
+          <div style="margin-top:6px;color:#fff">Server returned non-JSON (Status ${response.status}).</div>
+        </div>`;
+        return;
+      }
 
-      // If Full Scan is PRO-only, show paywall
       if (endpoint === "/analyze_full" && (data?.error === "pro_required" || response.status === 402)) {
         openModal();
         alert("Full Scan is PRO-only. Get PRO to unlock.");
@@ -303,7 +340,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
       renderResult(data);
       await refreshMe();
-
     } catch (e) {
       document.getElementById("result").innerHTML = `<div class="res-box res-high">
         <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
@@ -336,12 +372,9 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     if (!txid) return;
 
     const { data: { session } } = await sb.auth.getSession();
-    if (!session) {
-      alert("Please sign in first.");
-      return;
-    }
+    if (!session) { alert("Please sign in first."); return; }
 
-    document.getElementById("payStatus").textContent = "Verifying TXID...";
+    document.getElementById("payStatus").textContent = "Verifying TXID…";
 
     const r = await fetch("/api/payments/submit-txid", {
       method: "POST",
@@ -358,30 +391,29 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       return;
     }
 
-    document.getElementById("payStatus").textContent = "PRO activated. Unlimited checks enabled.";
+    document.getElementById("payStatus").textContent = "PRO activated. Unlimited enabled.";
     closeModal();
     await refreshMe();
   }
 
-  // Helps after magic link login
+  // Auth state changes: refresh & ensure overlay is closed
   sb.auth.onAuthStateChange(async () => {
     closeModal();
     await refreshMe();
+    setTimeout(() => refreshMe(), 500);
   });
 
-  // Handle return from magic link + ensure overlay doesn't block taps
+  // Handle magic link return (hash + code), then refresh twice
   (async () => {
     try {
       const href = window.location.href;
       const url = new URL(href);
 
-      // Case 1: code flow
       if (url.searchParams.get("code")) {
         await sb.auth.exchangeCodeForSession(href);
         window.history.replaceState({}, document.title, window.location.origin);
       }
 
-      // Case 2: hash tokens flow (#access_token=...&refresh_token=...)
       if (window.location.hash && window.location.hash.includes("access_token=")) {
         const hash = new URLSearchParams(window.location.hash.substring(1));
         const access_token = hash.get("access_token");
@@ -399,6 +431,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
     closeModal();
     await refreshMe();
+    setTimeout(() => refreshMe(), 600);
   })();
 </script>
 </body>
