@@ -22,14 +22,15 @@ TRONSCAN_API_BASE = (os.getenv("TRONSCAN_API_BASE") or "https://apilist.tronscan
 TRC20_USDT_CONTRACT = (os.getenv("TRC20_USDT_CONTRACT") or "").strip()
 
 if not SUPABASE_URL:
-    raise RuntimeError("Missing env SUPABASE_URL (Supabase Project URL)")
+    raise RuntimeError("Missing env SUPABASE_URL")
 if not SUPABASE_SECRET_KEY:
-    raise RuntimeError("Missing env SUPABASE_SECRET_KEY (sb_secret_... from Supabase API Keys)")
+    raise RuntimeError("Missing env SUPABASE_SECRET_KEY (sb_secret_...)")
 
 REST_BASE = f"{SUPABASE_URL}/rest/v1"
 AUTH_USER_ENDPOINT = f"{SUPABASE_URL}/auth/v1/user"
 
-# ===== TIME HELPERS =====
+
+# ===== TIME =====
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
@@ -37,7 +38,8 @@ def start_of_today_utc():
     now = utc_now()
     return datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
 
-# ===== AUTH HELPERS =====
+
+# ===== AUTH =====
 def get_bearer_token():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -58,7 +60,8 @@ def get_user_from_access_token(access_token: str):
         return None
     return {"id": uid, "email": j.get("email")}
 
-# ===== SUPABASE REST (server-side, privileged) =====
+
+# ===== SUPABASE REST (server, privileged) =====
 def sb_headers_server():
     return {
         "apikey": SUPABASE_SECRET_KEY,
@@ -116,7 +119,8 @@ def reset_daily_if_needed(profile):
         return profile_update(profile["id"], {"free_used_today": 0, "free_reset_at": today.isoformat()})
     return profile
 
-# ===== TRONSCAN PAYMENT VERIFY =====
+
+# ===== TRONSCAN =====
 def tronscan_txinfo(txid):
     url = f"{TRONSCAN_API_BASE}/transaction-info?hash={txid}"
     r = requests.get(url, timeout=15)
@@ -157,6 +161,7 @@ def verify_usdt_trc20_tx(txid, expected_to, usdt_contract, min_amount):
         return (False, "insufficient_amount", {"amount": amount, "min_amount": min_amount})
 
     return (True, "ok", {"to": to_addr, "contract": contract, "amount": amount, "decimals": decimals})
+
 
 # ===== FAST CHECK =====
 AI_KEYWORDS = [
@@ -241,6 +246,7 @@ def fast_check_score(url: str):
                 oembed.get("title") or "",
                 oembed.get("provider_name") or ""
             ]).strip()
+
             found, term = contains_ai_terms(text_fields)
             if found:
                 score += 35
@@ -261,6 +267,7 @@ def fast_check_score(url: str):
     verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
     return (score, verdict, reasons[:6])
 
+
 # ===== FULL SCAN (PRO-only, X-only) =====
 def is_x_status_url(url: str) -> bool:
     u = (url or "").lower()
@@ -274,6 +281,10 @@ def download_video_x(url: str, out_dir: str):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -352,20 +363,24 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
     score = max(0, min(100, score))
     return score, reasons[:6]
 
-# ===== DEBUG ROUTES =====
+
+# ===== DEBUG / INFO =====
 @app.get("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "realorfake", "has_analyze_full": True})
+    return jsonify({"ok": True, "service": "realorfake"})
 
 @app.get("/routes")
 def routes():
     return jsonify(sorted([str(r) for r in app.url_map.iter_rules()]))
 
-# ===== MAIN ROUTES =====
+
+# ===== UI =====
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
 
+
+# ===== ANALYZE =====
 @app.post("/analyze")
 def analyze():
     try:
@@ -387,11 +402,12 @@ def analyze():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.post("/analyze_full")
 def analyze_full():
     """
     PRO-only.
-    For X status links: tries to download video + frame heuristics.
+    For X status links: downloads video + frame heuristics.
     If not X: returns Fast Check fallback.
     """
     try:
@@ -410,7 +426,7 @@ def analyze_full():
         data = request.get_json() or {}
         url = (data.get("url", "") or "").strip()
 
-        # Not X -> fallback fast
+        # Not X -> fast fallback
         if not is_x_status_url(url):
             score, verdict, reasons = fast_check_score(url)
             if verdict == "invalid_url":
@@ -426,7 +442,6 @@ def analyze_full():
                 "note": "Full Scan supports X links. Returned Fast Check fallback."
             })
 
-        # X -> download + analyze
         with tempfile.TemporaryDirectory() as td:
             path = download_video_x(url, td)
             if not path:
@@ -458,7 +473,8 @@ def analyze_full():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-# ===== APP API =====
+
+# ===== API =====
 @app.get("/api/me")
 def api_me():
     token = get_bearer_token()
@@ -479,6 +495,7 @@ def api_me():
         "free_left_today": left,
         "daily_free_limit": DAILY_FREE_LIMIT
     })
+
 
 @app.post("/api/consume-scan")
 def api_consume_scan():
@@ -502,6 +519,7 @@ def api_consume_scan():
     profile_update(profile["id"], {"free_used_today": used})
     left = max(0, DAILY_FREE_LIMIT - used)
     return jsonify({"ok": True, "allowed": True, "reason": "free", "free_left_today": left})
+
 
 @app.post("/api/payments/submit-txid")
 def api_submit_txid():
