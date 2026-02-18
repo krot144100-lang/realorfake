@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 from yt_dlp import YoutubeDL
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 # ===== ENV =====
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
