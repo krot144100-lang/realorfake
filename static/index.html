@@ -1,438 +1,576 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>REALorFAKE – Risk Check</title>
-<style>
-:root { --bg:#000; --card:#111; --text:#fff; --accent:#ff0080; --muted:#888; --line:#222; }
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.container{width:100%;max-width:520px;background:var(--card);padding:34px 26px;border-radius:24px;box-shadow:0 10px 40px rgba(255,0,128,.10);border:1px solid var(--line);text-align:center}
-h1{margin:0 0 6px;font-size:32px;letter-spacing:-1px;background:linear-gradient(to right,#fff,#888);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.subtitle{color:var(--muted);margin-bottom:18px;font-size:14px;line-height:1.4}
-.badge{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:10px 0 12px}
-.pill{background:#0b0b0b;border:1px solid #262626;color:#bdbdbd;font-size:12px;padding:7px 10px;border-radius:999px}
-input{width:100%;padding:16px;margin-bottom:12px;background:#1a1a1a;border:1px solid #333;border-radius:12px;color:#fff;font-size:15px;outline:none;box-sizing:border-box;transition:.2s}
-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(255,0,128,.2)}
-button.action-btn{width:100%;padding:16px;background:#fff;color:#000;border:none;border-radius:12px;font-size:15px;font-weight:900;cursor:pointer;transition:.2s;text-transform:uppercase;letter-spacing:1px}
-button.action-btn:hover{transform:scale(1.01);background:#f0f0f0}
-button.action-btn:disabled{opacity:.55;cursor:wait;transform:none}
-button.secondary{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.12);text-transform:none;letter-spacing:0;font-weight:800}
-button.secondary:hover{background:rgba(255,255,255,.10)}
-#result{margin-top:18px;min-height:20px}
-.res-box{padding:18px;border-radius:16px;animation:popIn .25s;text-align:left}
-.res-high{background:rgba(255,23,68,.15);border:2px solid #ff1744;color:#ff7d8f}
-.res-med{background:rgba(255,183,77,.10);border:2px solid #ffb74d;color:#ffd4a2}
-.res-low{background:rgba(0,255,0,.10);border:2px solid #00ff00;color:#69f0ae}
-.res-percent{font-size:42px;font-weight:950;display:block;margin:6px 0 2px;color:#fff}
-.pay-big{background:linear-gradient(135deg,#ff0080,#ff4081);color:#fff;padding:18px 16px;border-radius:18px;text-decoration:none;display:block;margin:22px auto 8px;font-weight:900;font-size:18px;box-shadow:0 10px 30px rgba(255,0,128,.3);transition:transform .2s;cursor:pointer;border:1px solid rgba(255,255,255,.1)}
-.pay-big:hover{transform:scale(1.01);box-shadow:0 15px 40px rgba(255,0,128,.45)}
-.pay-sub{font-size:12px;opacity:.85;font-weight:normal;margin-top:6px;display:block}
-.small{font-size:12px;color:#9aa0aa;line-height:1.4;margin-top:10px}
-hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
-.row{display:flex;gap:10px}
-.row > *{flex:1}
+import os, re, datetime, tempfile
+import multiprocessing as mp
+import requests
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_from_directory
 
-/* MODAL FIX */
-.modal-overlay{
-  position:fixed; top:0; left:0;
-  width:100%; height:100%;
-  background:rgba(0,0,0,.8);
-  backdrop-filter:blur(5px);
-  z-index:999;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  opacity:0;
-  visibility:hidden;
-  transition:.25s;
-  pointer-events:none;
-}
-.modal-overlay.active{
-  opacity:1;
-  visibility:visible;
-  pointer-events:auto;
-}
-.modal-box{background:#141414;padding:22px;border-radius:22px;width:92%;max-width:420px;position:relative;border:1px solid #333;text-align:left;transform:translateY(16px);transition:.25s}
-.modal-overlay.active .modal-box{transform:translateY(0)}
-.close-btn{position:absolute;top:12px;right:16px;font-size:28px;cursor:pointer;color:#666}
-.close-btn:hover{color:#fff}
-.crypto-box{background:#000;padding:12px;border:1px dashed #444;border-radius:12px;margin-top:10px;font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#bbb;word-break:break-all;text-align:center;cursor:pointer;transition:.2s}
-.crypto-box:hover{border-color:#ff0080;color:#fff;background:#0a0a0a}
-.warn{margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,93,93,.35);background:rgba(255,93,93,.08);color:#ffd2d2;font-size:12px;line-height:1.35}
-.toast{margin-top:10px;color:#bfe3c6;font-size:12px}
-@keyframes popIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>REALorFAKE</h1>
-  <div class="subtitle">Fast AI / Deepfake Risk Check for Instagram, TikTok & X</div>
+import numpy as np
+import cv2
+from yt_dlp import YoutubeDL
 
-  <div class="badge">
-    <div class="pill" id="authState">Not signed in</div>
-    <div class="pill" id="quotaState">Free left today: —</div>
-  </div>
+app = Flask(__name__, static_folder="static", static_url_path="")
 
-  <div class="row" style="margin-bottom:10px">
-    <button class="action-btn secondary" onclick="refreshMe()">Refresh status</button>
-    <button class="action-btn secondary" onclick="signOut()">Sign out</button>
-  </div>
+# ===== ENV =====
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_SECRET_KEY = (os.getenv("SUPABASE_SECRET_KEY") or "").strip()  # sb_secret_...
 
-  <!-- LOGIN -->
-  <div id="loginBox">
-    <div class="row">
-      <input id="email" placeholder="Email to receive a magic link" />
-      <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendMagicLink()">SEND</button>
-    </div>
-    <div class="small">
-      We’ll email you a <b>magic link</b>. Tap “Log In” to sign in.<br>
-      Free: 10 Fast checks/day. PRO: unlimited + Full Scan (X Beta).
-    </div>
-    <hr>
-  </div>
+DAILY_FREE_LIMIT = int(os.getenv("DAILY_FREE_LIMIT", "10"))
 
-  <!-- MODE -->
-  <div class="row" style="margin-bottom:10px">
-    <button class="action-btn secondary" onclick="setMode('fast')">Fast</button>
-    <button class="action-btn secondary" onclick="setMode('full')">Full Scan (X • PRO)</button>
-  </div>
+PAY_TO_ADDRESS = (os.getenv("PAY_TO_ADDRESS") or "").strip()
+PRICE_USDT = float(os.getenv("PRICE_USDT", "9.00"))
 
-  <!-- SCAN -->
-  <input type="text" id="url" placeholder="Paste video link here..." />
-  <button onclick="check()" id="btn" class="action-btn" disabled>CHECK LINK</button>
+TRONSCAN_API_BASE = (os.getenv("TRONSCAN_API_BASE") or "https://apilist.tronscan.org/api").strip()
+TRC20_USDT_CONTRACT = (os.getenv("TRC20_USDT_CONTRACT") or "").strip()
 
-  <div id="result"></div>
+if not SUPABASE_URL:
+    raise RuntimeError("Missing env SUPABASE_URL")
+if not SUPABASE_SECRET_KEY:
+    raise RuntimeError("Missing env SUPABASE_SECRET_KEY (sb_secret_...)")
 
-  <a class="pay-big" onclick="openModal()">
-    🚀 GET PRO (LIFETIME)
-    <span class="pay-sub">Unlimited Checks • Full Scan (X) • API (coming soon)</span>
-  </a>
+REST_BASE = f"{SUPABASE_URL}/rest/v1"
+AUTH_USER_ENDPOINT = f"{SUPABASE_URL}/auth/v1/user"
 
-  <div class="small">
-    Fast Check is link-based. Full Scan (Beta) is best-effort and may be less confident on CGI/animation.
-  </div>
-</div>
 
-<!-- PAY MODAL -->
-<div id="paymentModal" class="modal-overlay">
-  <div class="modal-box">
-    <span class="close-btn" onclick="closeModal()">&times;</span>
+# ===== TIME =====
+def utc_now():
+    return datetime.datetime.now(datetime.timezone.utc)
 
-    <h2 style="margin:0 0 6px 0;color:#fff">Lifetime PRO</h2>
-    <div style="color:#9aa0aa;font-size:13px;line-height:1.5">
-      Unlimited checks forever + Full Scan (X Beta). Activate automatically by submitting your TXID.
-    </div>
+def start_of_today_utc():
+    now = utc_now()
+    return datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
 
-    <div class="warn"><b>TRC20 only.</b> Do not send ERC20/BEP20.</div>
 
-    <div style="margin-top:12px;color:#fff;font-weight:900">USDT (TRC20) • $9.00</div>
-    <div class="crypto-box" onclick="copyAddress()">TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB</div>
-    <div class="small">(Tap address to copy)</div>
+# ===== AUTH =====
+def get_bearer_token():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    return auth.replace("Bearer ", "").strip() or None
 
-    <div style="display:flex;justify-content:center;margin-top:10px;">
-      <div style="background:#fff;padding:10px;border-radius:14px;">
-        <img id="qrImg" width="190" height="190" alt="TRC20 QR">
-      </div>
-    </div>
-
-    <div style="margin-top:12px;color:#9aa0aa;font-size:12px;line-height:1.5">
-      1) Send <b>$9 USDT</b> to the address above<br>
-      2) Paste your <b>TXID</b> below<br>
-      3) Tap <b>Activate PRO</b>
-    </div>
-
-    <input id="txid" placeholder="Paste TXID here..." style="margin-top:12px" />
-    <button class="action-btn" style="margin-top:10px;font-size:13px;padding:12px" onclick="activatePro()">
-      ACTIVATE PRO
-    </button>
-
-    <div id="payStatus" class="toast"></div>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-<script>
-  const SUPABASE_URL = "https://ktwmwehxqaztyodabqqj.supabase.co";
-  const SUPABASE_ANON_KEY = "sb_publishable_I0bbQ83Qw6pVidgdlO-GcQ_64BEQGtM";
-
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  const addr = "TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB";
-  const modal = document.getElementById("paymentModal");
-
-  let MODE = "fast";
-  let AUTH_READY = false;
-
-  function setMode(m){
-    MODE = m;
-    alert("Mode: " + (MODE === "fast" ? "Fast Check" : "Full Scan (X • PRO)"));
-  }
-
-  function setScanUiEnabled(enabled){
-    const scanBtn = document.getElementById("btn");
-    if (scanBtn) scanBtn.disabled = !enabled;
-  }
-
-  function setAuthPill(text){
-    const el = document.getElementById("authState");
-    if (el) el.textContent = text;
-  }
-  function setQuotaPill(text){
-    const el = document.getElementById("quotaState");
-    if (el) el.textContent = text;
-  }
-
-  async function refreshMe() {
-    setScanUiEnabled(false);
-    AUTH_READY = false;
-
-    const { data: { session } } = await sb.auth.getSession();
-
-    if (!session) {
-      setAuthPill("Not signed in");
-      setQuotaPill("Free left today: —");
-      return;
+def get_user_from_access_token(access_token: str):
+    headers = {
+        "apikey": SUPABASE_SECRET_KEY,
+        "Authorization": f"Bearer {access_token}",
     }
+    r = requests.get(AUTH_USER_ENDPOINT, headers=headers, timeout=15)
+    if r.status_code != 200:
+        return None
+    j = r.json()
+    uid = j.get("id")
+    if not uid:
+        return None
+    return {"id": uid, "email": j.get("email")}
 
-    setAuthPill("Signed in: " + session.user.email);
-    setQuotaPill("Loading…");
 
-    try {
-      const resp = await fetch("/api/me", {
-        headers: { "Authorization": "Bearer " + session.access_token }
-      });
-
-      const text = await resp.text();
-      let me = null;
-      try { me = JSON.parse(text); } catch(e) {}
-
-      if (!resp.ok || !me || !me.ok) {
-        setQuotaPill("Auth error: " + resp.status);
-        return;
-      }
-
-      if (me.is_pro) setQuotaPill("PRO Active: Unlimited");
-      else setQuotaPill("Free left today: " + me.free_left_today + " / " + me.daily_free_limit);
-
-      AUTH_READY = true;
-      setScanUiEnabled(true);
-    } catch (e) {
-      setQuotaPill("Network error");
-    }
-  }
-
-  async function signOut() {
-    await sb.auth.signOut();
-    closeModal();
-    await refreshMe();
-  }
-
-  async function sendMagicLink() {
-    const email = document.getElementById("email").value.trim();
-    if (!email) return;
-
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: "https://realorfake-vk4d.onrender.com" }
-    });
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-    alert("Magic link sent. Open your email and tap 'Log In'.");
-  }
-
-  function renderResult(data) {
-    const resDiv = document.getElementById("result");
-    const reasons = (data.reasons || []).map(r => `<div style="font-size:12px;opacity:.95;margin-top:6px;color:#fff">• ${r}</div>`).join("");
-    const pct = (data.percent ?? 0);
-    const label = (data.type || "result").toUpperCase();
-
-    if (data.verdict === "high_risk") {
-      resDiv.innerHTML = `<div class="res-box res-high">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
-        <span class="res-percent">${pct}%</span>
-        <div style="font-size:14px;color:#fff">High risk of AI manipulation.</div>
-        <div style="margin-top:10px">${reasons}</div>
-      </div>`;
-    } else if (data.verdict === "medium_risk") {
-      resDiv.innerHTML = `<div class="res-box res-med">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
-        <span class="res-percent">${pct}%</span>
-        <div style="font-size:14px;color:#fff">Medium risk. Verify before reposting.</div>
-        <div style="margin-top:10px">${reasons}</div>
-      </div>`;
-    } else {
-      resDiv.innerHTML = `<div class="res-box res-low">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
-        <span class="res-percent">${pct}%</span>
-        <div style="font-size:14px;color:#fff">Low risk based on signals.</div>
-        <div style="margin-top:10px">${reasons}</div>
-      </div>`;
-    }
-  }
-
-  async function check() {
-    const input = document.getElementById("url");
-    const btn = document.getElementById("btn");
-    const url = input.value.trim();
-
-    if (!url) { alert("Paste a link first."); return; }
-    if (!AUTH_READY) { alert("Please wait… session is initializing. Tap 'Refresh status' once."); return; }
-
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) { alert("Please sign in first."); return; }
-
-    btn.disabled = true;
-    btn.textContent = "CHECKING…";
-    document.getElementById("result").innerHTML = "";
-
-    try {
-      // Fast mode consumes free quota (unless PRO)
-      if (MODE === "fast") {
-        const quota = await fetch("/api/consume-scan", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + session.access_token
-          },
-          body: JSON.stringify({})
-        }).then(r => r.json());
-
-        if (!quota.ok || quota.allowed === false) {
-          document.getElementById("result").innerHTML = `<div class="res-box res-high">
-            <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
-            <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited + Full Scan.</div>
-          </div>`;
-          openModal();
-          await refreshMe();
-          return;
-        }
-      }
-
-      const endpoint = (MODE === "full") ? "/analyze_full" : "/analyze";
-      const headers = { "Content-Type": "application/json" };
-      if (endpoint === "/analyze_full") headers["Authorization"] = "Bearer " + session.access_token;
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ url })
-      });
-
-      const text = await response.text();
-      let data = null;
-      try { data = JSON.parse(text); } catch(e) {
-        document.getElementById("result").innerHTML = `<div class="res-box res-high">
-          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
-          <div style="margin-top:6px;color:#fff">Server returned non-JSON (Status ${response.status}).</div>
-        </div>`;
-        return;
-      }
-
-      if (endpoint === "/analyze_full" && (data?.error === "pro_required" || response.status === 402)) {
-        openModal();
-        alert("Full Scan is PRO-only. Get PRO to unlock.");
-        return;
-      }
-
-      renderResult(data);
-      await refreshMe();
-    } catch (e) {
-      document.getElementById("result").innerHTML = `<div class="res-box res-high">
-        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
-        <div style="margin-top:6px;color:#fff">${(e && e.message) ? e.message : "Unknown error"}</div>
-      </div>`;
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "CHECK LINK";
-    }
-  }
-
-  function openModal() {
-    modal.classList.add("active");
-    QRCode.toDataURL(addr, { margin: 1, width: 190 }, (err, url) => {
-      if (!err) document.getElementById("qrImg").src = url;
-    });
-  }
-  function closeModal() { modal.classList.remove("active"); }
-  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
-
-  function copyAddress() {
-    navigator.clipboard.writeText(addr).then(() => {
-      document.getElementById("payStatus").textContent = "Address copied.";
-      setTimeout(() => document.getElementById("payStatus").textContent = "", 1200);
-    }).catch(() => prompt("Copy address:", addr));
-  }
-
-  async function activatePro() {
-    const txid = document.getElementById("txid").value.trim();
-    if (!txid) return;
-
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) { alert("Please sign in first."); return; }
-
-    document.getElementById("payStatus").textContent = "Verifying TXID…";
-
-    const r = await fetch("/api/payments/submit-txid", {
-      method: "POST",
-      headers: {
+# ===== SUPABASE REST (server, privileged) =====
+def sb_headers_server():
+    return {
+        "apikey": SUPABASE_SECRET_KEY,
+        "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + session.access_token
-      },
-      body: JSON.stringify({ txid })
-    });
-
-    const j = await r.json();
-    if (!j.ok) {
-      document.getElementById("payStatus").textContent = "Payment not verified: " + j.error;
-      return;
     }
 
-    document.getElementById("payStatus").textContent = "PRO activated. Unlimited enabled.";
-    closeModal();
-    await refreshMe();
-  }
+def profile_get(user_id: str):
+    url = f"{REST_BASE}/profiles?id=eq.{user_id}&select=*"
+    r = requests.get(url, headers=sb_headers_server(), timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"profiles_get_failed: {r.status_code} {r.text}")
+    data = r.json()
+    return data[0] if data else None
 
-  // Auth state changes: refresh & ensure overlay is closed
-  sb.auth.onAuthStateChange(async () => {
-    closeModal();
-    await refreshMe();
-    setTimeout(() => refreshMe(), 500);
-  });
+def profile_insert(user_id: str, email: str):
+    url = f"{REST_BASE}/profiles"
+    payload = [{
+        "id": user_id,
+        "email": email,
+        "is_pro": False,
+        "free_used_today": 0,
+        "free_reset_at": start_of_today_utc().isoformat()
+    }]
+    headers = sb_headers_server()
+    headers["Prefer"] = "return=representation"
+    r = requests.post(url, headers=headers, json=payload, timeout=15)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"profiles_insert_failed: {r.status_code} {r.text}")
+    return r.json()[0]
 
-  // Handle magic link return (hash + code), then refresh twice
-  (async () => {
-    try {
-      const href = window.location.href;
-      const url = new URL(href);
+def profile_update(user_id: str, fields: dict):
+    url = f"{REST_BASE}/profiles?id=eq.{user_id}"
+    headers = sb_headers_server()
+    headers["Prefer"] = "return=representation"
+    r = requests.patch(url, headers=headers, json=fields, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"profiles_update_failed: {r.status_code} {r.text}")
+    data = r.json()
+    return data[0] if data else None
 
-      if (url.searchParams.get("code")) {
-        await sb.auth.exchangeCodeForSession(href);
-        window.history.replaceState({}, document.title, window.location.origin);
-      }
+def ensure_profile(user):
+    p = profile_get(user["id"])
+    if p:
+        return p
+    return profile_insert(user["id"], user.get("email"))
 
-      if (window.location.hash && window.location.hash.includes("access_token=")) {
-        const hash = new URLSearchParams(window.location.hash.substring(1));
-        const access_token = hash.get("access_token");
-        const refresh_token = hash.get("refresh_token");
-        const expires_in = parseInt(hash.get("expires_in") || "3600", 10);
+def reset_daily_if_needed(profile):
+    try:
+        reset_at = datetime.datetime.fromisoformat(profile["free_reset_at"].replace("Z", "+00:00"))
+    except Exception:
+        reset_at = start_of_today_utc()
+    today = start_of_today_utc()
+    if reset_at < today:
+        return profile_update(profile["id"], {"free_used_today": 0, "free_reset_at": today.isoformat()})
+    return profile
 
-        if (access_token && refresh_token) {
-          await sb.auth.setSession({ access_token, refresh_token, expires_in });
-          window.history.replaceState({}, document.title, window.location.origin);
-        }
-      }
 
-      await sb.auth.getSession();
-    } catch (e) {}
+# ===== TRONSCAN =====
+def tronscan_txinfo(txid):
+    url = f"{TRONSCAN_API_BASE}/transaction-info?hash={txid}"
+    r = requests.get(url, timeout=15)
+    if r.status_code != 200:
+        return None
+    return r.json()
 
-    closeModal();
-    await refreshMe();
-    setTimeout(() => refreshMe(), 600);
-  })();
-</script>
-</body>
-</html>
+def verify_usdt_trc20_tx(txid, expected_to, usdt_contract, min_amount):
+    j = tronscan_txinfo(txid)
+    if not j:
+        return (False, "tronscan_unavailable", {})
+
+    info = j.get("trc20TransferInfo")
+    if not info:
+        return (False, "not_a_trc20_transfer", {"raw_keys": list(j.keys())})
+
+    to_addr = (info.get("to_address") or "").strip()
+    contract = (info.get("contract_address") or "").strip()
+    amount_str = info.get("amount_str")
+    decimals = int(info.get("decimals") or 6)
+
+    confirmed = (j.get("confirmed") is True) or (int(j.get("confirmations") or 0) > 0)
+    if not confirmed:
+        return (False, "not_confirmed_yet", {"confirmations": j.get("confirmations")})
+
+    try:
+        amount = float(amount_str) / (10 ** decimals)
+    except Exception:
+        return (False, "bad_amount", {"amount_str": amount_str, "decimals": decimals})
+
+    if expected_to and to_addr != expected_to:
+        return (False, "wrong_recipient", {"to": to_addr, "expected": expected_to})
+
+    if usdt_contract and contract != usdt_contract:
+        return (False, "wrong_token_contract", {"contract": contract, "expected": usdt_contract})
+
+    if amount + 1e-9 < float(min_amount):
+        return (False, "insufficient_amount", {"amount": amount, "min_amount": min_amount})
+
+    return (True, "ok", {"to": to_addr, "contract": contract, "amount": amount, "decimals": decimals})
+
+
+# ===== FAST CHECK =====
+AI_KEYWORDS = [
+    "kling", "luma", "sora", "runway", "midjourney", "haiper", "synthesia", "heygen",
+    "deepfake", "face swap", "faceswap", "ai generated", "aigenerated"
+]
+HIGH_RISK_HOSTS = {"x.com", "twitter.com"}
+MED_RISK_HOSTS = {"tiktok.com", "www.tiktok.com", "instagram.com", "www.instagram.com"}
+
+def normalize_host(url):
+    try:
+        p = urlparse(url)
+        host = (p.netloc or "").lower()
+        if host.startswith("m."):
+            host = host[2:]
+        return host
+    except Exception:
+        return ""
+
+def fetch_x_oembed(url: str):
+    try:
+        api = "https://publish.twitter.com/oembed"
+        r = requests.get(api, params={"url": url}, timeout=8)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception:
+        return None
+
+def contains_ai_terms(text: str):
+    if not text:
+        return False, None
+    t = text.lower()
+    terms = [
+        "ai", "a.i.", "deepfake", "face swap", "faceswap", "synthetic",
+        "sora", "runway", "kling", "luma", "midjourney", "haiper",
+        "generated", "ai-generated", "aigenerated"
+    ]
+    for term in terms:
+        if term in t:
+            return True, term
+    return False, None
+
+def fast_check_score(url: str):
+    url_l = (url or "").strip().lower()
+    reasons, score = [], 0
+
+    if not url_l.startswith("http"):
+        return (0, "invalid_url", ["URL must start with http/https"])
+
+    host = normalize_host(url_l)
+    if not host:
+        return (0, "invalid_url", ["Could not parse URL host"])
+
+    is_x = host in HIGH_RISK_HOSTS
+    is_short = host in MED_RISK_HOSTS
+
+    if is_x:
+        score += 30
+        reasons.append("Source signal: X/Twitter has a high repost/bot content rate")
+    elif is_short:
+        score += 18
+        reasons.append("Source signal: short-form platforms have frequent reuploads")
+    else:
+        score += 10
+        reasons.append("Source signal: unknown platform (harder to verify original source)")
+
+    matched = [k for k in AI_KEYWORDS if k in url_l]
+    if matched:
+        score += 55
+        reasons.append(f"AI keyword detected in link: {matched[0]}")
+
+    if re.search(r"(download|dl=|save|repost|mirror|cdn|proxy)", url_l):
+        score += 12
+        reasons.append("Reupload pattern detected in link (download/repost/mirror)")
+
+    if is_x and "/status/" in url_l:
+        oembed = fetch_x_oembed(url)
+        if oembed:
+            text_fields = " ".join([
+                oembed.get("author_name") or "",
+                oembed.get("title") or "",
+                oembed.get("provider_name") or ""
+            ]).strip()
+
+            found, term = contains_ai_terms(text_fields)
+            if found:
+                score += 35
+                reasons.append(f"Text signal: AI-related term detected in post metadata: {term}")
+
+            html = (oembed.get("html") or "").lower()
+            if "video" in html or "twitter-tweet" in html:
+                score += 8
+                reasons.append("Content signal: embed indicates rich media (possible video)")
+        else:
+            reasons.append("Metadata note: could not fetch oEmbed info (public metadata limited)")
+
+    if is_short and "@" not in url_l and "/@" not in url_l:
+        score += 7
+        reasons.append("Weak origin signal: no visible creator handle in the URL")
+
+    score = max(0, min(100, score))
+    verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
+    return (score, verdict, reasons[:6])
+
+
+# ===== FULL SCAN (PRO-only, X-only) =====
+def is_x_status_url(url: str) -> bool:
+    u = (url or "").lower()
+    return ("x.com" in u or "twitter.com" in u) and ("/status/" in u)
+
+def download_video_x(url: str, out_dir: str):
+    ydl_opts = {
+        "outtmpl": os.path.join(out_dir, "video.%(ext)s"),
+        "format": "mp4/bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "socket_timeout": 10,
+        "retries": 1,
+        "fragment_retries": 1,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.extract_info(url, download=True)
+        for ext in ["mp4", "mkv", "webm"]:
+            p = os.path.join(out_dir, f"video.{ext}")
+            if os.path.exists(p):
+                return p
+    return None
+
+def _dl_worker(url, out_dir, q):
+    try:
+        path = download_video_x(url, out_dir)
+        q.put(path)
+    except Exception:
+        q.put(None)
+
+def download_video_x_with_timeout(url: str, out_dir: str, timeout_sec: int = 15):
+    q = mp.Queue()
+    p = mp.Process(target=_dl_worker, args=(url, out_dir, q))
+    p.start()
+    p.join(timeout_sec)
+    if p.is_alive():
+        p.terminate()
+        p.join(2)
+        return None
+    try:
+        return q.get_nowait()
+    except Exception:
+        return None
+
+def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return 0, ["Could not open video for analysis"]
+
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    step = max(1, total // max_frames) if total > 0 else 10
+
+    blur_scores = []
+    texture_scores = []
+    frames_read = 0
+    idx = 0
+
+    while frames_read < max_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frames_read += 1
+        idx += step
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        sharp = float(lap.var())
+        blur_scores.append(sharp)
+
+        f = np.fft.fft2(gray)
+        fshift = np.fft.fftshift(f)
+        magnitude = np.log(np.abs(fshift) + 1.0)
+        hf = float(np.mean(magnitude))
+        texture_scores.append(hf)
+
+    cap.release()
+
+    if frames_read < 3:
+        return 0, ["Not enough frames to analyze"]
+
+    sharp_m = float(np.median(blur_scores))
+    tex_m = float(np.median(texture_scores))
+
+    reasons = []
+    score = 0
+
+    if sharp_m < 80:
+        score += 35
+        reasons.append("Frame signal: unusually low sharpness (over-smoothed look)")
+    elif sharp_m < 140:
+        score += 18
+        reasons.append("Frame signal: slightly low sharpness (possible heavy filtering)")
+
+    if tex_m < 4.3:
+        score += 35
+        reasons.append("Frame signal: low texture detail (synthetic/denoised appearance)")
+    elif tex_m < 4.8:
+        score += 18
+        reasons.append("Frame signal: reduced texture detail (possible AI smoothing)")
+
+    if score >= 60:
+        score += 10
+        reasons.append("Combined signal: multiple synthetic-looking frame patterns")
+
+    score = max(0, min(100, score))
+    return score, reasons[:6]
+
+
+# ===== DEBUG / INFO =====
+@app.get("/healthz")
+def healthz():
+    return jsonify({"ok": True, "service": "realorfake"})
+
+@app.get("/routes")
+def routes():
+    return jsonify(sorted([str(r) for r in app.url_map.iter_rules()]))
+
+
+# ===== UI =====
+@app.get("/")
+def index():
+    return send_from_directory("static", "index.html")
+
+
+# ===== ANALYZE =====
+@app.post("/analyze")
+def analyze():
+    try:
+        data = request.get_json() or {}
+        url = (data.get("url", "") or "").strip()
+
+        score, verdict, reasons = fast_check_score(url)
+        if verdict == "invalid_url":
+            return jsonify({"error": "invalid_url", "message": reasons[0]}), 400
+
+        return jsonify({
+            "result": "fake" if verdict == "high_risk" else "real",
+            "percent": int(score),
+            "verdict": verdict,
+            "reasons": reasons,
+            "type": "fast_check",
+            "note": "Fast risk check based on link/source signals. Not 100% proof."
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/analyze_full")
+def analyze_full():
+    """
+    PRO-only.
+    For X status links: downloads video + frame heuristics.
+    If not X: returns Fast Check fallback.
+    """
+    try:
+        token = get_bearer_token()
+        if not token:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        user = get_user_from_access_token(token)
+        if not user:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        profile = reset_daily_if_needed(ensure_profile(user))
+        if not profile.get("is_pro"):
+            return jsonify({"ok": False, "error": "pro_required", "message": "Full Scan (Beta) is available in PRO."}), 402
+
+        data = request.get_json() or {}
+        url = (data.get("url", "") or "").strip()
+
+        # Not X -> fast fallback
+        if not is_x_status_url(url):
+            score, verdict, reasons = fast_check_score(url)
+            if verdict == "invalid_url":
+                return jsonify({"ok": False, "error": "invalid_url", "message": reasons[0]}), 400
+
+            return jsonify({
+                "ok": True,
+                "result": "fake" if verdict == "high_risk" else "real",
+                "percent": int(score),
+                "verdict": verdict,
+                "reasons": reasons,
+                "type": "fast_check_fallback",
+                "note": "Full Scan supports X links. Returned Fast Check fallback."
+            })
+
+        # X -> download with hard timeout
+        with tempfile.TemporaryDirectory() as td:
+            path = download_video_x_with_timeout(url, td, timeout_sec=15)
+            if not path:
+                score, verdict, reasons = fast_check_score(url)
+                return jsonify({
+                    "ok": True,
+                    "result": "fake" if verdict == "high_risk" else "real",
+                    "percent": int(score),
+                    "verdict": verdict,
+                    "reasons": (["Download timed out/blocked; returned Fast Check fallback."] + reasons)[:6],
+                    "type": "fast_check_fallback",
+                    "note": "Could not download X video within timeout. Returned Fast Check fallback."
+                })
+
+            score, reasons = analyze_video_frames_basic(path, max_frames=12)
+
+        verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
+
+        return jsonify({
+            "ok": True,
+            "result": "fake" if verdict == "high_risk" else "real",
+            "percent": int(score),
+            "verdict": verdict,
+            "reasons": reasons,
+            "type": "full_scan_beta",
+            "note": "Full Scan (Beta) uses lightweight frame heuristics. Not 100% proof."
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ===== API =====
+@app.get("/api/me")
+def api_me():
+    token = get_bearer_token()
+    if not token:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    user = get_user_from_access_token(token)
+    if not user:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    profile = reset_daily_if_needed(ensure_profile(user))
+    left = None if profile["is_pro"] else max(0, DAILY_FREE_LIMIT - int(profile["free_used_today"]))
+
+    return jsonify({
+        "ok": True,
+        "user": {"id": user["id"], "email": user.get("email")},
+        "is_pro": profile["is_pro"],
+        "free_left_today": left,
+        "daily_free_limit": DAILY_FREE_LIMIT
+    })
+
+
+@app.post("/api/consume-scan")
+def api_consume_scan():
+    token = get_bearer_token()
+    if not token:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    user = get_user_from_access_token(token)
+    if not user:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    profile = reset_daily_if_needed(ensure_profile(user))
+    if profile["is_pro"]:
+        return jsonify({"ok": True, "allowed": True, "reason": "pro"})
+
+    used = int(profile["free_used_today"])
+    if used >= DAILY_FREE_LIMIT:
+        return jsonify({"ok": True, "allowed": False, "reason": "limit_reached", "free_left_today": 0})
+
+    used += 1
+    profile_update(profile["id"], {"free_used_today": used})
+    left = max(0, DAILY_FREE_LIMIT - used)
+    return jsonify({"ok": True, "allowed": True, "reason": "free", "free_left_today": left})
+
+
+@app.post("/api/payments/submit-txid")
+def api_submit_txid():
+    token = get_bearer_token()
+    if not token:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    user = get_user_from_access_token(token)
+    if not user:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    body = request.get_json() or {}
+    txid = (body.get("txid", "") or "").strip()
+    if len(txid) < 10:
+        return jsonify({"ok": False, "error": "txid_required"}), 400
+
+    ok, code, meta = verify_usdt_trc20_tx(
+        txid=txid,
+        expected_to=PAY_TO_ADDRESS,
+        usdt_contract=TRC20_USDT_CONTRACT,
+        min_amount=PRICE_USDT
+    )
+    if not ok:
+        return jsonify({"ok": False, "error": code, "meta": meta}), 400
+
+    profile_update(user["id"], {
+        "is_pro": True,
+        "pro_plan": "lifetime_pro",
+        "pro_activated_at": utc_now().isoformat()
+    })
+    return jsonify({"ok": True, "status": "activated", "is_pro": True, "meta": meta})
