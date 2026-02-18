@@ -33,10 +33,9 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 .row{display:flex;gap:10px}
 .row > *{flex:1}
 
-/* MODAL: key fix = pointer-events none when hidden */
+/* MODAL: important fix = no pointer events when hidden */
 .modal-overlay{
-  position:fixed;
-  top:0; left:0;
+  position:fixed; top:0; left:0;
   width:100%; height:100%;
   background:rgba(0,0,0,.8);
   backdrop-filter:blur(5px);
@@ -47,14 +46,13 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   opacity:0;
   visibility:hidden;
   transition:.25s;
-  pointer-events:none; /* IMPORTANT */
+  pointer-events:none;
 }
 .modal-overlay.active{
   opacity:1;
   visibility:visible;
-  pointer-events:auto; /* clickable only when active */
+  pointer-events:auto;
 }
-
 .modal-box{background:#141414;padding:22px;border-radius:22px;width:92%;max-width:420px;position:relative;border:1px solid #333;text-align:left;transform:translateY(16px);transition:.25s}
 .modal-overlay.active .modal-box{transform:translateY(0)}
 .close-btn{position:absolute;top:12px;right:16px;font-size:28px;cursor:pointer;color:#666}
@@ -89,9 +87,15 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     </div>
     <div class="small">
       We’ll email you a <b>magic link</b>. Tap “Log In” in your email to sign in.<br>
-      Free: 10 checks/day. PRO: unlimited.
+      Free: 10 checks/day. PRO: unlimited + Full Scan (X).
     </div>
     <hr>
+  </div>
+
+  <!-- MODE -->
+  <div class="row" style="margin-bottom:10px">
+    <button class="action-btn secondary" onclick="setMode('fast')">Fast</button>
+    <button class="action-btn secondary" onclick="setMode('full')">Full Scan (X • PRO)</button>
   </div>
 
   <!-- SCAN -->
@@ -102,11 +106,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
   <a class="pay-big" onclick="openModal()">
     🚀 GET PRO (LIFETIME)
-    <span class="pay-sub">Unlimited Checks • Faster Access • API (coming soon)</span>
+    <span class="pay-sub">Unlimited Checks • Full Scan (X) • API (coming soon)</span>
   </a>
 
   <div class="small">
-    This is a fast risk estimate based on link/source signals. Not 100% proof.
+    Fast Check is link-based. Full Scan (Beta) uses lightweight frame heuristics. Not 100% proof.
   </div>
 </div>
 
@@ -117,7 +121,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
     <h2 style="margin:0 0 6px 0;color:#fff">Lifetime PRO</h2>
     <div style="color:#9aa0aa;font-size:13px;line-height:1.5">
-      Unlimited checks forever. Activate automatically by submitting your TXID.
+      Unlimited checks forever + Full Scan (X Beta). Activate automatically by submitting your TXID.
     </div>
 
     <div class="warn"><b>TRC20 only.</b> Do not send ERC20/BEP20.</div>
@@ -150,7 +154,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script>
-  // Supabase project URL + publishable key (safe in browser)
   const SUPABASE_URL = "https://ktwmwehxqaztyodabqqj.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_I0bbQ83Qw6pVidgdlO-GcQ_64BEQGtM";
 
@@ -158,6 +161,12 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
   const addr = "TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB";
   const modal = document.getElementById("paymentModal");
+
+  let MODE = "fast";
+  function setMode(m){
+    MODE = m;
+    alert("Mode: " + (MODE === "fast" ? "Fast Check" : "Full Scan (X • PRO)"));
+  }
 
   async function refreshMe() {
     const { data: { session } } = await sb.auth.getSession();
@@ -190,9 +199,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
     const { error } = await sb.auth.signInWithOtp({
       email,
-      options: {
-        emailRedirectTo: "https://realorfake-vk4d.onrender.com"
-      }
+      options: { emailRedirectTo: "https://realorfake-vk4d.onrender.com" }
     });
 
     if (error) {
@@ -202,10 +209,38 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     alert("Magic link sent. Open your email and tap 'Log In'.");
   }
 
+  function renderResult(data) {
+    const resDiv = document.getElementById("result");
+    const reasons = (data.reasons || []).map(r => `<div style="font-size:12px;opacity:.95;margin-top:6px;color:#fff">• ${r}</div>`).join("");
+    const pct = (data.percent ?? 0);
+
+    if (data.verdict === "high_risk") {
+      resDiv.innerHTML = `<div class="res-box res-high">
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${(data.type || "RESULT").toUpperCase()}</div>
+        <span class="res-percent">${pct}%</span>
+        <div style="font-size:14px;color:#fff">High risk of AI manipulation.</div>
+        <div style="margin-top:10px">${reasons}</div>
+      </div>`;
+    } else if (data.verdict === "medium_risk") {
+      resDiv.innerHTML = `<div class="res-box res-med">
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${(data.type || "RESULT").toUpperCase()}</div>
+        <span class="res-percent">${pct}%</span>
+        <div style="font-size:14px;color:#fff">Medium risk. Verify before reposting.</div>
+        <div style="margin-top:10px">${reasons}</div>
+      </div>`;
+    } else {
+      resDiv.innerHTML = `<div class="res-box res-low">
+        <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${(data.type || "RESULT").toUpperCase()}</div>
+        <span class="res-percent">${pct}%</span>
+        <div style="font-size:14px;color:#fff">Low risk based on signals.</div>
+        <div style="margin-top:10px">${reasons}</div>
+      </div>`;
+    }
+  }
+
   async function check() {
     const input = document.getElementById("url");
     const btn = document.getElementById("btn");
-    const resDiv = document.getElementById("result");
     const url = input.value.trim();
 
     if (!url) {
@@ -221,64 +256,56 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
     btn.disabled = true;
     btn.textContent = "CHECKING...";
-    resDiv.innerHTML = "";
+    document.getElementById("result").innerHTML = "";
 
     try {
-      const quota = await fetch("/api/consume-scan", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + session.access_token
-        },
-        body: JSON.stringify({})
-      }).then(r => r.json());
+      // For Fast mode: consume free quota (unless PRO)
+      if (MODE === "fast") {
+        const quota = await fetch("/api/consume-scan", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + session.access_token
+          },
+          body: JSON.stringify({})
+        }).then(r => r.json());
 
-      if (!quota.ok || quota.allowed === false) {
-        resDiv.innerHTML = `<div class="res-box res-high">
-          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
-          <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited checks.</div>
-        </div>`;
-        openModal();
-        await refreshMe();
-        return;
+        if (!quota.ok || quota.allowed === false) {
+          document.getElementById("result").innerHTML = `<div class="res-box res-high">
+            <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
+            <div style="margin-top:6px;color:#fff">Free limit reached. Get PRO for unlimited checks + Full Scan.</div>
+          </div>`;
+          openModal();
+          await refreshMe();
+          return;
+        }
       }
 
-      const response = await fetch("/analyze", {
+      const endpoint = (MODE === "full") ? "/analyze_full" : "/analyze";
+
+      const headers = { "Content-Type": "application/json" };
+      if (endpoint === "/analyze_full") headers["Authorization"] = "Bearer " + session.access_token;
+
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ url })
       });
 
       const data = await response.json();
 
-      const reasons = (data.reasons || []).map(r => `<div style="font-size:12px;opacity:.95;margin-top:6px;color:#fff">• ${r}</div>`).join("");
-
-      if (data.verdict === "high_risk") {
-        resDiv.innerHTML = `<div class="res-box res-high">
-          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">FAST CHECK</div>
-          <span class="res-percent">${data.percent}%</span>
-          <div style="font-size:14px;color:#fff">High risk of AI manipulation.</div>
-          <div style="margin-top:10px">${reasons}</div>
-        </div>`;
-      } else if (data.verdict === "medium_risk") {
-        resDiv.innerHTML = `<div class="res-box res-med">
-          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">FAST CHECK</div>
-          <span class="res-percent">${data.percent}%</span>
-          <div style="font-size:14px;color:#fff">Medium risk. Verify before reposting.</div>
-          <div style="margin-top:10px">${reasons}</div>
-        </div>`;
-      } else {
-        resDiv.innerHTML = `<div class="res-box res-low">
-          <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">FAST CHECK</div>
-          <span class="res-percent">${data.percent}%</span>
-          <div style="font-size:14px;color:#fff">Low risk based on link signals.</div>
-          <div style="margin-top:10px">${reasons}</div>
-        </div>`;
+      // If Full Scan is PRO-only, show paywall
+      if (endpoint === "/analyze_full" && (data?.error === "pro_required" || response.status === 402)) {
+        openModal();
+        alert("Full Scan is PRO-only. Get PRO to unlock.");
+        return;
       }
 
+      renderResult(data);
       await refreshMe();
+
     } catch (e) {
-      resDiv.innerHTML = `<div class="res-box res-high">
+      document.getElementById("result").innerHTML = `<div class="res-box res-high">
         <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">ERROR</div>
         <div style="margin-top:6px;color:#fff">${(e && e.message) ? e.message : "Unknown error"}</div>
       </div>`;
@@ -336,13 +363,13 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     await refreshMe();
   }
 
-  // React to auth changes (helps after magic link)
+  // Helps after magic link login
   sb.auth.onAuthStateChange(async () => {
-    closeModal(); // IMPORTANT: ensure no overlay blocks taps
+    closeModal();
     await refreshMe();
   });
 
-  // Handle return from magic link + make sure overlay is closed
+  // Handle return from magic link + ensure overlay doesn't block taps
   (async () => {
     try {
       const href = window.location.href;
@@ -368,11 +395,9 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       }
 
       await sb.auth.getSession();
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
 
-    closeModal(); // IMPORTANT: fix "overlay blocks all clicks" after login
+    closeModal();
     await refreshMe();
   })();
 </script>
