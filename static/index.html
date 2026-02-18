@@ -85,7 +85,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       <button class="action-btn" style="padding:14px;font-size:13px" onclick="sendMagicLink()">SEND</button>
     </div>
     <div class="small">
-      Login is optional for <b>Fast</b>. Needed for Free quota (10/day) + PRO + Full Scan.
+      Login optional for <b>Fast</b>. Needed for Free quota (10/day) + paid plans + Full Scan.
     </div>
     <hr>
   </div>
@@ -101,8 +101,8 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   <div id="result"></div>
 
   <a class="pay-big" onclick="openModal()">
-    🚀 GET PRO (LIFETIME)
-    <span class="pay-sub">Unlimited Checks • Full Scan (X) • API (coming soon)</span>
+    💳 GET PAID PLAN
+    <span class="pay-sub">$5 Starter (Unlimited Fast) • $9 Pro (Full Scan X)</span>
   </a>
 
   <div class="small">
@@ -114,14 +114,14 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   <div class="modal-box">
     <span class="close-btn" onclick="closeModal()">&times;</span>
 
-    <h2 style="margin:0 0 6px 0;color:#fff">Lifetime PRO</h2>
+    <h2 style="margin:0 0 6px 0;color:#fff">Choose a plan</h2>
     <div style="color:#9aa0aa;font-size:13px;line-height:1.5">
-      Unlimited checks forever + Full Scan (X Beta). Activate automatically by submitting your TXID.
+      Pay with USDT (TRC20). Then paste TXID to activate.
     </div>
 
     <div class="warn"><b>TRC20 only.</b> Do not send ERC20/BEP20.</div>
 
-    <div style="margin-top:12px;color:#fff;font-weight:900">USDT (TRC20) • $9.00</div>
+    <div style="margin-top:12px;color:#fff;font-weight:900">Send to address:</div>
     <div class="crypto-box" onclick="copyAddress()">TXzgMGjDHUt52QNTcXSP67qB4AmuB1H1KB</div>
     <div class="small">(Tap address to copy)</div>
 
@@ -131,15 +131,17 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       </div>
     </div>
 
-    <div style="margin-top:12px;color:#9aa0aa;font-size:12px;line-height:1.5">
-      1) Send <b>$9 USDT</b> to the address above<br>
-      2) Paste your <b>TXID</b> below<br>
-      3) Tap <b>Activate PRO</b>
+    <div style="margin-top:14px;display:flex;gap:10px">
+      <button class="action-btn secondary" style="padding:12px;font-size:13px" onclick="setPlan('starter')">$5 Starter</button>
+      <button class="action-btn secondary" style="padding:12px;font-size:13px" onclick="setPlan('pro')">$9 Pro</button>
+    </div>
+    <div class="small" id="planHint" style="margin-top:8px">
+      Selected: PRO ($9) — includes Full Scan (X Beta)
     </div>
 
     <input id="txid" placeholder="Paste TXID here..." style="margin-top:12px" />
-    <button class="action-btn" style="margin-top:10px;font-size:13px;padding:12px" onclick="activatePro()">
-      ACTIVATE PRO
+    <button class="action-btn" style="margin-top:10px;font-size:13px;padding:12px" onclick="activatePaid()">
+      ACTIVATE
     </button>
 
     <div id="payStatus" class="toast"></div>
@@ -157,10 +159,18 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   const modal = document.getElementById("paymentModal");
 
   let MODE = "fast";
+  let PAY_PLAN = "pro";
 
   function setMode(m){
     MODE = m;
     alert("Mode: " + (MODE === "fast" ? "Fast Check" : "Full Scan (X • PRO)"));
+  }
+
+  function setPlan(p){
+    PAY_PLAN = p;
+    const hint = document.getElementById("planHint");
+    if (p === "starter") hint.textContent = "Selected: STARTER ($5) — Unlimited Fast checks";
+    else hint.textContent = "Selected: PRO ($9) — Includes Full Scan (X Beta)";
   }
 
   function setAuthPill(text){
@@ -197,7 +207,8 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         return;
       }
 
-      if (me.is_pro) setQuotaPill("PRO Active: Unlimited");
+      if (me.has_full_scan) setQuotaPill("PRO Active: Full Scan enabled");
+      else if (me.is_paid) setQuotaPill("STARTER Active: Unlimited Fast");
       else setQuotaPill("Free left today: " + me.free_left_today + " / " + me.daily_free_limit + " (logged-in only)");
     } catch (e) {
       setQuotaPill("Network error");
@@ -265,7 +276,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
     const { data: { session } } = await sb.auth.getSession();
 
-    // Full scan requires login + PRO (server enforces PRO)
     if (MODE === "full" && !session) {
       openModal();
       alert("Full Scan requires login + PRO.");
@@ -279,11 +289,9 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     try {
       const endpoint = (MODE === "full") ? "/analyze_full" : "/analyze";
       const headers = { "Content-Type": "application/json" };
-
-      // Auth header only when logged in (needed for full + for quota)
       if (session) headers["Authorization"] = "Bearer " + session.access_token;
 
-      // If logged in and FAST: apply free quota via backend
+      // If logged in and FAST: apply quota (or unlimited if paid)
       if (MODE === "fast" && session) {
         const quota = await fetch("/api/consume-scan", {
           method: "POST",
@@ -297,7 +305,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         if (!quota.ok || quota.allowed === false) {
           document.getElementById("result").innerHTML = `<div class="res-box res-high">
             <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">LIMIT REACHED</div>
-            <div style="margin-top:6px;color:#fff">Free quota reached. Get PRO for unlimited + Full Scan.</div>
+            <div style="margin-top:6px;color:#fff">Free quota reached. Buy Starter/Pro for unlimited.</div>
           </div>`;
           openModal();
           await refreshMe();
@@ -343,7 +351,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
 
       if (endpoint === "/analyze_full" && (data?.error === "pro_required" || response.status === 402)) {
         openModal();
-        alert("Full Scan is PRO-only. Get PRO to unlock.");
+        alert("Full Scan is PRO-only.");
         return;
       }
 
@@ -377,12 +385,15 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     }).catch(() => prompt("Copy address:", addr));
   }
 
-  async function activatePro() {
+  async function activatePaid() {
     const txid = document.getElementById("txid").value.trim();
     if (!txid) return;
 
     const { data: { session } } = await sb.auth.getSession();
-    if (!session) { alert("Please sign in first."); return; }
+    if (!session) {
+      alert("Please sign in first (email magic link).");
+      return;
+    }
 
     document.getElementById("payStatus").textContent = "Verifying TXID…";
 
@@ -392,7 +403,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         "Content-Type": "application/json",
         "Authorization": "Bearer " + session.access_token
       },
-      body: JSON.stringify({ txid })
+      body: JSON.stringify({ txid, plan: PAY_PLAN })
     });
 
     const j = await r.json();
@@ -401,7 +412,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       return;
     }
 
-    document.getElementById("payStatus").textContent = "PRO activated. Unlimited enabled.";
+    document.getElementById("payStatus").textContent = "Activated: " + (j.plan || PAY_PLAN).toUpperCase();
     closeModal();
     await refreshMe();
   }
@@ -413,7 +424,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       const url = new URL(href);
 
       if (window.location.hash && window.location.hash.includes("error=")) {
-        // Clean URL on auth error to avoid loops
         window.history.replaceState({}, document.title, window.location.origin);
       }
 
