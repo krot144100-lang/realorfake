@@ -106,7 +106,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   </a>
 
   <div class="small">
-    Fast Check is link-based. Full Scan (Beta) is best-effort and may be less confident on CGI/animation.
+    Full Scan shows extra diagnostics: download status, frames analyzed, signal strength.
   </div>
 </div>
 
@@ -243,11 +243,23 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     const pct = (data.percent ?? 0);
     const label = (data.type || "result").toUpperCase();
 
+    // Full Scan extra meta
+    const metaLines = [];
+    if (data.type === "full_scan_beta") {
+      metaLines.push(`Download: ${data.download_ok ? "OK" : "—"}`);
+      metaLines.push(`Frames analyzed: ${data.frames_analyzed ?? "—"}`);
+      metaLines.push(`Signal strength: ${data.signal_strength ?? "—"}`);
+    }
+    const meta = metaLines.length
+      ? `<div style="margin-top:6px;font-size:12px;color:#fff;opacity:.9">${metaLines.join(" • ")}</div>`
+      : "";
+
     if (data.verdict === "high_risk") {
       resDiv.innerHTML = `<div class="res-box res-high">
         <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
         <span class="res-percent">${pct}%</span>
         <div style="font-size:14px;color:#fff">High risk of AI manipulation.</div>
+        ${meta}
         <div style="margin-top:10px">${reasons}</div>
       </div>`;
     } else if (data.verdict === "medium_risk") {
@@ -255,6 +267,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
         <span class="res-percent">${pct}%</span>
         <div style="font-size:14px;color:#fff">Medium risk. Verify before reposting.</div>
+        ${meta}
         <div style="margin-top:10px">${reasons}</div>
       </div>`;
     } else {
@@ -262,6 +275,7 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
         <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">${label}</div>
         <span class="res-percent">${pct}%</span>
         <div style="font-size:14px;color:#fff">Low risk based on signals.</div>
+        ${meta}
         <div style="margin-top:10px">${reasons}</div>
       </div>`;
     }
@@ -271,7 +285,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     const input = document.getElementById("url");
     const btn = document.getElementById("btn");
     const url = input.value.trim();
-
     if (!url) { alert("Paste a link first."); return; }
 
     const { data: { session } } = await sb.auth.getSession();
@@ -417,7 +430,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     await refreshMe();
   }
 
-  // Handle magic link return
   (async () => {
     try {
       const href = window.location.href;
