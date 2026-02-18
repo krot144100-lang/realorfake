@@ -30,7 +30,6 @@ if not SUPABASE_SECRET_KEY:
 REST_BASE = f"{SUPABASE_URL}/rest/v1"
 AUTH_USER_ENDPOINT = f"{SUPABASE_URL}/auth/v1/user"
 
-
 # ===== TIME =====
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
@@ -38,7 +37,6 @@ def utc_now():
 def start_of_today_utc():
     now = utc_now()
     return datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
-
 
 # ===== AUTH =====
 def get_bearer_token():
@@ -61,8 +59,7 @@ def get_user_from_access_token(access_token: str):
         return None
     return {"id": uid, "email": j.get("email")}
 
-
-# ===== SUPABASE REST (server, privileged) =====
+# ===== SUPABASE REST (server privileged) =====
 def sb_headers_server():
     return {
         "apikey": SUPABASE_SECRET_KEY,
@@ -120,7 +117,6 @@ def reset_daily_if_needed(profile):
         return profile_update(profile["id"], {"free_used_today": 0, "free_reset_at": today.isoformat()})
     return profile
 
-
 # ===== TRONSCAN =====
 def tronscan_txinfo(txid):
     url = f"{TRONSCAN_API_BASE}/transaction-info?hash={txid}"
@@ -162,7 +158,6 @@ def verify_usdt_trc20_tx(txid, expected_to, usdt_contract, min_amount):
         return (False, "insufficient_amount", {"amount": amount, "min_amount": min_amount})
 
     return (True, "ok", {"to": to_addr, "contract": contract, "amount": amount, "decimals": decimals})
-
 
 # ===== FAST CHECK =====
 AI_KEYWORDS = [
@@ -268,8 +263,7 @@ def fast_check_score(url: str):
     verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
     return (score, verdict, reasons[:6])
 
-
-# ===== FULL SCAN (PRO-only, X-only) =====
+# ===== FULL SCAN (PRO-only) =====
 def is_x_status_url(url: str) -> bool:
     u = (url or "").lower()
     return ("x.com" in u or "twitter.com" in u) and ("/status/" in u)
@@ -298,28 +292,7 @@ def download_video_x(url: str, out_dir: str):
                 return p
     return None
 
-def _dl_worker(url, out_dir, q):
-    try:
-        path = download_video_x(url, out_dir)
-        q.put(path)
-    except Exception:
-        q.put(None)
-
-def download_video_x_with_timeout(url: str, out_dir: str, timeout_sec: int = 15):
-    q = mp.Queue()
-    p = mp.Process(target=_dl_worker, args=(url, out_dir, q))
-    p.start()
-    p.join(timeout_sec)
-    if p.is_alive():
-        p.terminate()
-        p.join(2)
-        return None
-    try:
-        return q.get_nowait()
-    except Exception:
-        return None
-
-def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
+def analyze_video_frames_basic(video_path: str, max_frames: int = 10):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return 0, ["Could not open video for analysis"]
@@ -385,8 +358,33 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
     score = max(0, min(100, score))
     return score, reasons[:6]
 
+def _fullscan_worker(url, q):
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            path = download_video_x(url, td)
+            if not path:
+                q.put({"ok": False, "stage": "download"})
+                return
+            score, reasons = analyze_video_frames_basic(path, max_frames=10)
+            q.put({"ok": True, "score": score, "reasons": reasons})
+    except Exception as e:
+        q.put({"ok": False, "stage": "exception", "error": str(e)})
 
-# ===== DEBUG / INFO =====
+def run_fullscan_with_timeout(url: str, timeout_sec: int = 18):
+    q = mp.Queue()
+    p = mp.Process(target=_fullscan_worker, args=(url, q))
+    p.start()
+    p.join(timeout_sec)
+    if p.is_alive():
+        p.terminate()
+        p.join(2)
+        return None
+    try:
+        return q.get_nowait()
+    except Exception:
+        return None
+
+# ===== DEBUG =====
 @app.get("/healthz")
 def healthz():
     return jsonify({"ok": True, "service": "realorfake"})
@@ -395,12 +393,10 @@ def healthz():
 def routes():
     return jsonify(sorted([str(r) for r in app.url_map.iter_rules()]))
 
-
 # ===== UI =====
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
-
 
 # ===== ANALYZE =====
 @app.post("/analyze")
@@ -424,14 +420,8 @@ def analyze():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.post("/analyze_full")
 def analyze_full():
-    """
-    PRO-only.
-    For X status links: downloads video + frame heuristics.
-    If not X: returns Fast Check fallback.
-    """
     try:
         token = get_bearer_token()
         if not token:
@@ -448,12 +438,11 @@ def analyze_full():
         data = request.get_json() or {}
         url = (data.get("url", "") or "").strip()
 
-        # Not X -> fast fallback
+        # Not X -> fallback fast
         if not is_x_status_url(url):
             score, verdict, reasons = fast_check_score(url)
             if verdict == "invalid_url":
                 return jsonify({"ok": False, "error": "invalid_url", "message": reasons[0]}), 400
-
             return jsonify({
                 "ok": True,
                 "result": "fake" if verdict == "high_risk" else "real",
@@ -464,23 +453,36 @@ def analyze_full():
                 "note": "Full Scan supports X links. Returned Fast Check fallback."
             })
 
-        # X -> download with hard timeout
-        with tempfile.TemporaryDirectory() as td:
-            path = download_video_x_with_timeout(url, td, timeout_sec=15)
-            if not path:
-                score, verdict, reasons = fast_check_score(url)
-                return jsonify({
-                    "ok": True,
-                    "result": "fake" if verdict == "high_risk" else "real",
-                    "percent": int(score),
-                    "verdict": verdict,
-                    "reasons": (["Download timed out/blocked; returned Fast Check fallback."] + reasons)[:6],
-                    "type": "fast_check_fallback",
-                    "note": "Could not download X video within timeout. Returned Fast Check fallback."
-                })
+        result = run_fullscan_with_timeout(url, timeout_sec=18)
 
-            score, reasons = analyze_video_frames_basic(path, max_frames=12)
+        # Timeout -> fallback fast
+        if result is None:
+            score, verdict, reasons = fast_check_score(url)
+            return jsonify({
+                "ok": True,
+                "result": "fake" if verdict == "high_risk" else "real",
+                "percent": int(score),
+                "verdict": verdict,
+                "reasons": (["Full Scan timed out; returned Fast Check fallback."] + reasons)[:6],
+                "type": "fast_check_fallback",
+                "note": "Full Scan timed out. Returned Fast Check fallback."
+            })
 
+        # Download/analyze failed -> fallback
+        if not result.get("ok"):
+            score, verdict, reasons = fast_check_score(url)
+            return jsonify({
+                "ok": True,
+                "result": "fake" if verdict == "high_risk" else "real",
+                "percent": int(score),
+                "verdict": verdict,
+                "reasons": (["Full Scan failed/blocked; returned Fast Check fallback."] + reasons)[:6],
+                "type": "fast_check_fallback",
+                "note": "Full Scan failed. Returned Fast Check fallback."
+            })
+
+        score = float(result["score"])
+        reasons = result["reasons"]
         verdict = "high_risk" if score >= 75 else ("medium_risk" if score >= 45 else "low_risk")
 
         return jsonify({
@@ -495,7 +497,6 @@ def analyze_full():
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-
 
 # ===== API =====
 @app.get("/api/me")
@@ -519,7 +520,6 @@ def api_me():
         "daily_free_limit": DAILY_FREE_LIMIT
     })
 
-
 @app.post("/api/consume-scan")
 def api_consume_scan():
     token = get_bearer_token()
@@ -542,7 +542,6 @@ def api_consume_scan():
     profile_update(profile["id"], {"free_used_today": used})
     left = max(0, DAILY_FREE_LIMIT - used)
     return jsonify({"ok": True, "allowed": True, "reason": "free", "free_left_today": left})
-
 
 @app.post("/api/payments/submit-txid")
 def api_submit_txid():
