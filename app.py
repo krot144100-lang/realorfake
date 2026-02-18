@@ -8,13 +8,7 @@ import cv2
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-@app.get("/healthz")
-def healthz():
-    return jsonify({
-        "ok": True,
-        "service": "realorfake",
-        "has_analyze_full": True
-    })
+
 # ===== ENV =====
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
 SUPABASE_SECRET_KEY = (os.getenv("SUPABASE_SECRET_KEY") or "").strip()  # sb_secret_...
@@ -51,9 +45,6 @@ def get_bearer_token():
     return auth.replace("Bearer ", "").strip() or None
 
 def get_user_from_access_token(access_token: str):
-    """
-    Verifies user's Supabase access_token and returns {id, email} or None.
-    """
     headers = {
         "apikey": SUPABASE_SECRET_KEY,
         "Authorization": f"Bearer {access_token}",
@@ -186,9 +177,6 @@ def normalize_host(url):
         return ""
 
 def fetch_x_oembed(url: str):
-    """
-    Free and fast metadata for X/Twitter posts (public oEmbed).
-    """
     try:
         api = "https://publish.twitter.com/oembed"
         r = requests.get(api, params={"url": url}, timeout=8)
@@ -226,7 +214,6 @@ def fast_check_score(url: str):
     is_x = host in HIGH_RISK_HOSTS
     is_short = host in MED_RISK_HOSTS
 
-    # 1) Source
     if is_x:
         score += 30
         reasons.append("Source signal: X/Twitter has a high repost/bot content rate")
@@ -237,18 +224,15 @@ def fast_check_score(url: str):
         score += 10
         reasons.append("Source signal: unknown platform (harder to verify original source)")
 
-    # 2) URL keywords
     matched = [k for k in AI_KEYWORDS if k in url_l]
     if matched:
         score += 55
         reasons.append(f"AI keyword detected in link: {matched[0]}")
 
-    # 3) Reupload patterns
     if re.search(r"(download|dl=|save|repost|mirror|cdn|proxy)", url_l):
         score += 12
         reasons.append("Reupload pattern detected in link (download/repost/mirror)")
 
-    # 4) X oEmbed metadata
     if is_x and "/status/" in url_l:
         oembed = fetch_x_oembed(url)
         if oembed:
@@ -269,7 +253,6 @@ def fast_check_score(url: str):
         else:
             reasons.append("Metadata note: could not fetch oEmbed info (public metadata limited)")
 
-    # 5) Weak origin handle for IG/TikTok
     if is_short and "@" not in url_l and "/@" not in url_l:
         score += 7
         reasons.append("Weak origin signal: no visible creator handle in the URL")
@@ -284,10 +267,6 @@ def is_x_status_url(url: str) -> bool:
     return ("x.com" in u or "twitter.com" in u) and ("/status/" in u)
 
 def download_video_x(url: str, out_dir: str):
-    """
-    Download best available mp4 for X/Twitter using yt-dlp.
-    Returns filepath or None.
-    """
     ydl_opts = {
         "outtmpl": os.path.join(out_dir, "video.%(ext)s"),
         "format": "mp4/bestvideo+bestaudio/best",
@@ -308,10 +287,6 @@ def download_video_x(url: str, out_dir: str):
     return None
 
 def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
-    """
-    Lightweight pixel-level heuristics (not ML).
-    Returns score 0-100 and reasons.
-    """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return 0, ["Could not open video for analysis"]
@@ -335,12 +310,10 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Sharpness via Laplacian variance (low => over-smoothed)
         lap = cv2.Laplacian(gray, cv2.CV_64F)
         sharp = float(lap.var())
         blur_scores.append(sharp)
 
-        # Texture proxy via frequency magnitude
         f = np.fft.fft2(gray)
         fshift = np.fft.fftshift(f)
         magnitude = np.log(np.abs(fshift) + 1.0)
@@ -379,16 +352,22 @@ def analyze_video_frames_basic(video_path: str, max_frames: int = 12):
     score = max(0, min(100, score))
     return score, reasons[:6]
 
-# ===== ROUTES =====
+# ===== DEBUG ROUTES =====
+@app.get("/healthz")
+def healthz():
+    return jsonify({"ok": True, "service": "realorfake", "has_analyze_full": True})
+
+@app.get("/routes")
+def routes():
+    return jsonify(sorted([str(r) for r in app.url_map.iter_rules()]))
+
+# ===== MAIN ROUTES =====
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
 
 @app.post("/analyze")
 def analyze():
-    """
-    FAST CHECK: no download, no ML. Free users use this (10/day).
-    """
     try:
         data = request.get_json() or {}
         url = (data.get("url", "") or "").strip()
@@ -411,13 +390,11 @@ def analyze():
 @app.post("/analyze_full")
 def analyze_full():
     """
-    FULL SCAN (BETA):
-    - PRO-only
-    - Intended for X/Twitter status links (downloads video + frame heuristics)
-    - If not X, automatically falls back to FAST CHECK (as requested)
+    PRO-only.
+    For X status links: tries to download video + frame heuristics.
+    If not X: returns Fast Check fallback.
     """
     try:
-        # Auth required (PRO gate)
         token = get_bearer_token()
         if not token:
             return jsonify({"ok": False, "error": "unauthorized"}), 401
@@ -428,16 +405,12 @@ def analyze_full():
 
         profile = reset_daily_if_needed(ensure_profile(user))
         if not profile.get("is_pro"):
-            return jsonify({
-                "ok": False,
-                "error": "pro_required",
-                "message": "Full Scan (Beta) is available in PRO."
-            }), 402
+            return jsonify({"ok": False, "error": "pro_required", "message": "Full Scan (Beta) is available in PRO."}), 402
 
         data = request.get_json() or {}
         url = (data.get("url", "") or "").strip()
 
-        # Not X -> fallback to FAST CHECK
+        # Not X -> fallback fast
         if not is_x_status_url(url):
             score, verdict, reasons = fast_check_score(url)
             if verdict == "invalid_url":
@@ -450,14 +423,13 @@ def analyze_full():
                 "verdict": verdict,
                 "reasons": reasons,
                 "type": "fast_check_fallback",
-                "note": "Full Scan is supported for X links. This result is a Fast Check fallback."
+                "note": "Full Scan supports X links. Returned Fast Check fallback."
             })
 
-        # X -> try to download and analyze frames
+        # X -> download + analyze
         with tempfile.TemporaryDirectory() as td:
             path = download_video_x(url, td)
             if not path:
-                # Fallback to fast check if download fails
                 score, verdict, reasons = fast_check_score(url)
                 return jsonify({
                     "ok": True,
@@ -486,6 +458,7 @@ def analyze_full():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+# ===== APP API =====
 @app.get("/api/me")
 def api_me():
     token = get_bearer_token()
