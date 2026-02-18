@@ -79,7 +79,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     <button class="action-btn secondary" onclick="signOut()">Sign out</button>
   </div>
 
-  <!-- LOGIN -->
   <div id="loginBox">
     <div class="row">
       <input id="email" placeholder="Email to receive a magic link" />
@@ -92,13 +91,11 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     <hr>
   </div>
 
-  <!-- MODE -->
   <div class="row" style="margin-bottom:10px">
     <button class="action-btn secondary" onclick="setMode('fast')">Fast</button>
     <button class="action-btn secondary" onclick="setMode('full')">Full Scan (X • PRO)</button>
   </div>
 
-  <!-- SCAN -->
   <input type="text" id="url" placeholder="Paste video link here..." />
   <button onclick="check()" id="btn" class="action-btn" disabled>CHECK LINK</button>
 
@@ -114,7 +111,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
   </div>
 </div>
 
-<!-- PAY MODAL -->
 <div id="paymentModal" class="modal-overlay">
   <div class="modal-box">
     <span class="close-btn" onclick="closeModal()">&times;</span>
@@ -290,7 +286,6 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     document.getElementById("result").innerHTML = "";
 
     try {
-      // Fast mode consumes free quota (unless PRO)
       if (MODE === "fast") {
         const quota = await fetch("/api/consume-scan", {
           method: "POST",
@@ -316,11 +311,31 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
       const headers = { "Content-Type": "application/json" };
       if (endpoint === "/analyze_full") headers["Authorization"] = "Bearer " + session.access_token;
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ url })
-      });
+      // HARD client timeout (prevents infinite "CHECKING...")
+      const controller = new AbortController();
+      const timeoutMs = (endpoint === "/analyze_full") ? 25000 : 12000;
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      let response;
+      try {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ url }),
+          signal: controller.signal
+        });
+      } catch (e) {
+        if (String(e).includes("AbortError")) {
+          document.getElementById("result").innerHTML = `<div class="res-box res-high">
+            <div style="font-size:12px;font-weight:900;opacity:0.9;color:#fff">TIMEOUT</div>
+            <div style="margin-top:6px;color:#fff">Request timed out. X may block downloads. Try again or use Fast Check.</div>
+          </div>`;
+          return;
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
 
       const text = await response.text();
       let data = null;
@@ -396,14 +411,12 @@ hr{border:0;border-top:1px solid #1f1f1f;margin:16px 0}
     await refreshMe();
   }
 
-  // Auth state changes: refresh & ensure overlay is closed
   sb.auth.onAuthStateChange(async () => {
     closeModal();
     await refreshMe();
     setTimeout(() => refreshMe(), 500);
   });
 
-  // Handle magic link return (hash + code), then refresh twice
   (async () => {
     try {
       const href = window.location.href;
